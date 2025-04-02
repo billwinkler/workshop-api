@@ -1,4 +1,5 @@
 (ns workshop-api.core
+  (:gen-class)
   (:require [ring.adapter.jetty :as jetty]
             [compojure.core :refer :all]
             [ring.middleware.json :refer [wrap-json-response]]))
