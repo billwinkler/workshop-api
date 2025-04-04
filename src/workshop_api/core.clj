@@ -3,6 +3,7 @@
   (:require [ring.adapter.jetty :as jetty]
             [compojure.core :refer :all]
             [ring.middleware.json :refer [wrap-json-body wrap-json-response]]
+            [ring.middleware.params :refer [wrap-params]]  ;; Added
             [ring.util.response :refer [response status]]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
@@ -116,7 +117,8 @@
 ;; New search handler
 (defn search-inventory [request]
   (println "Full request:" request)  ;; Debug full request
-  (let [query (get-in request [:params :q])
+  (let [query (or (get (:query-params request) "q")  ;; Direct get with string key
+                  (get (:params request) "q"))       ;; Fallback to :params
         _ (println "Search query:" query) ;; Debug
         items (if (str/blank? query)
                 []
@@ -132,6 +134,7 @@
 
 (def app
   (-> app-routes
+      wrap-params  ;; Added wrap-params
       (wrap-json-body {:keywords? true})
       wrap-json-response))
 
