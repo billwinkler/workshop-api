@@ -78,16 +78,25 @@
                  ["SELECT * FROM items WHERE location_id = ?" location-id]
                  {:builder-fn rs/as-unqualified-lower-maps}))
 
-;; New search function
+(defn get-location-path [loc-id]
+  (letfn [(build-path [id acc]
+            (if-let [loc (db-get-location id)]
+              (if (nil? (:parent_id loc))
+                (conj acc (:name loc))
+                (build-path (:parent_id loc) (conj acc (:name loc))))
+              acc))]
+    (str/join " > " (build-path loc-id []))))
+
 (defn db-search-items [query]
-  (let [search-term (str "%" query "%")]
-    (jdbc/execute! ds
-                   ["SELECT i.*, l.name AS location_name, l.parent_id
-                     FROM items i
-                     JOIN locations l ON i.location_id = l.id
-                     WHERE i.name ILIKE ? OR i.category ILIKE ? OR i.supplier ILIKE ? OR i.description ILIKE ? OR i.notes ILIKE ?"
-                    search-term search-term search-term search-term search-term]
-                   {:builder-fn rs/as-unqualified-lower-maps})))
+  (let [search-term (str "%" query "%")
+        items (jdbc/execute! ds
+                            ["SELECT i.*, l.name AS location_name, l.parent_id
+                              FROM items i
+                              JOIN locations l ON i.location_id = l.id
+                              WHERE i.name ILIKE ? OR i.category ILIKE ? OR i.supplier ILIKE ? OR i.description ILIKE ? OR i.notes ILIKE ?"
+                             search-term search-term search-term search-term search-term]
+                            {:builder-fn rs/as-unqualified-lower-maps})]
+    (map #(assoc % :location_path (get-location-path (:location_id %))) items)))
 
 (defn add-location [request]
   (let [loc (keywordize-keys (:body request))]
@@ -116,14 +125,10 @@
 
 ;; New search handler
 (defn search-inventory [request]
-  (println "Full request:" request)  ;; Debug full request
-  (let [query (or (get (:query-params request) "q")  ;; Direct get with string key
-                  (get (:params request) "q"))       ;; Fallback to :params
-        _ (println "Search query:" query) ;; Debug
+  (let [query (get (:query-params request) "q")
         items (if (str/blank? query)
                 []
                 (db-search-items query))]
-    (println "Found items:" (count items)) ;; Debug
     (response items)))
 
 (defroutes app-routes
