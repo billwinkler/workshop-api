@@ -5,7 +5,8 @@
             [ring.middleware.json :refer [wrap-json-body wrap-json-response]]
             [ring.util.response :refer [response status]]
             [next.jdbc :as jdbc]
-            [next.jdbc.result-set :as rs])
+            [next.jdbc.result-set :as rs]
+            [clojure.string :as str])
   (:import [java.sql Timestamp]
            [java.time Instant]))
 
@@ -76,6 +77,17 @@
                  ["SELECT * FROM items WHERE location_id = ?" location-id]
                  {:builder-fn rs/as-unqualified-lower-maps}))
 
+;; New search function
+(defn db-search-items [query]
+  (let [search-term (str "%" query "%")]
+    (jdbc/execute! ds
+                   ["SELECT i.*, l.name AS location_name, l.parent_id
+                     FROM items i
+                     JOIN locations l ON i.location_id = l.id
+                     WHERE i.name ILIKE ? OR i.category ILIKE ? OR i.supplier ILIKE ? OR i.description ILIKE ? OR i.notes ILIKE ?"
+                    search-term search-term search-term search-term search-term]
+                   {:builder-fn rs/as-unqualified-lower-maps})))
+
 (defn add-location [request]
   (let [loc (keywordize-keys (:body request))]
     (if (valid-location? loc)
@@ -101,10 +113,22 @@
       (response {:location loc :items items}))
     (status (response {:error "Location not found"}) 404)))
 
+;; New search handler
+(defn search-inventory [request]
+  (println "Full request:" request)  ;; Debug full request
+  (let [query (get-in request [:params :q])
+        _ (println "Search query:" query) ;; Debug
+        items (if (str/blank? query)
+                []
+                (db-search-items query))]
+    (println "Found items:" (count items)) ;; Debug
+    (response items)))
+
 (defroutes app-routes
   (POST "/location" request (add-location request))
   (POST "/item" request (add-item request))
-  (GET "/inventory/location/:id" [id] (get-location-details id)))
+  (GET "/inventory/location/:id" [id] (get-location-details id))
+  (GET "/inventory/search" request (search-inventory request))) ;; a new route
 
 (def app
   (-> app-routes
