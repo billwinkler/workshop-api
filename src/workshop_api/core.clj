@@ -73,12 +73,17 @@
                      ["SELECT * FROM locations WHERE id = ?" id]
                      {:builder-fn rs/as-unqualified-lower-maps}))
 
+;; New function to get location by name
+(defn db-get-location-by-name [name]
+  (jdbc/execute-one! ds
+                     ["SELECT * FROM locations WHERE name = ?" name]
+                     {:builder-fn rs/as-unqualified-lower-maps}))
+
 (defn db-get-items-by-location [location-id]
   (jdbc/execute! ds
                  ["SELECT * FROM items WHERE location_id = ?" location-id]
                  {:builder-fn rs/as-unqualified-lower-maps}))
 
-;; New function to get item by ID
 (defn db-get-item [id]
   (jdbc/execute-one! ds
                      ["SELECT i.*, l.name AS location_name, l.parent_id
@@ -132,12 +137,18 @@
       (response {:location loc :items items}))
     (status (response {:error "Location not found"}) 404)))
 
-;; New handler for GET /item/:id
 (defn get-item [id]
   (if-let [item (db-get-item id)]
     (let [item-with-path (assoc item :location_path (get-location-path (:location_id item)))]
       (response item-with-path))
     (status (response {:error "Item not found"}) 404)))
+
+;; New handler for GET /location/:name
+(defn get-location-by-name [name]
+  (if-let [loc (db-get-location-by-name name)]
+    (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
+      (response loc-with-path))
+    (status (response {:error "Location not found"} 404))))
 
 (defn search-inventory [request]
   (let [query (get (:query-params request) "q")
@@ -151,7 +162,8 @@
   (POST "/item" request (add-item request))
   (GET "/inventory/location/:id" [id] (get-location-details id))
   (GET "/inventory/search" request (search-inventory request))
-  (GET "/item/:id" [id] (get-item id))) ;; a new route
+  (GET "/item/:id" [id] (get-item id))
+  (GET "/location/:name" [name] (get-location-by-name name))) ;; a new route
 
 (def app
   (-> app-routes
