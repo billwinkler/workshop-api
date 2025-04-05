@@ -142,15 +142,21 @@
       (response item-with-path))
     (status (response {:error "Item not found"}) 404)))
 
-;; Upgraded exception response
+;; Upgraded handling of how spaces may be encoded
 (defn get-location-by-name [name]
-  (try
-    (if-let [loc (db-get-location-by-name name)]
-      (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
-        (response loc-with-path))
-      (status (response {:error "Location not found"}) 404))
-    (catch Exception e
-      (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
+  (let [normalized-name (str/replace name "+" " ")]
+    (println "Fetching location by name:" normalized-name)
+    (try
+      (if-let [loc (db-get-location-by-name normalized-name)]
+        (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
+          (println "Found location:" loc-with-path)
+          (response loc-with-path))
+        (do
+          (println "Location not found for name:" normalized-name)
+          (status (response {:error "Location not found"}) 404)))
+      (catch Exception e
+        (println "Error fetching location:" (.getMessage e))
+        (status (response {:error "Internal server error" :message (.getMessage e)}) 500)))))
 
 (defn search-inventory [request]
   (let [query (get (:query-params request) "q")
