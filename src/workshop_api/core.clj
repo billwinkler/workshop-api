@@ -73,7 +73,6 @@
                      ["SELECT * FROM locations WHERE id = ?" id]
                      {:builder-fn rs/as-unqualified-lower-maps}))
 
-;; New function to get location by name
 (defn db-get-location-by-name [name]
   (jdbc/execute-one! ds
                      ["SELECT * FROM locations WHERE name = ?" name]
@@ -143,12 +142,15 @@
       (response item-with-path))
     (status (response {:error "Item not found"}) 404)))
 
-;; New handler for GET /location/:name
+;; Upgraded exception response
 (defn get-location-by-name [name]
-  (if-let [loc (db-get-location-by-name name)]
-    (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
-      (response loc-with-path))
-    (status (response {:error "Location not found"} 404))))
+  (try
+    (if-let [loc (db-get-location-by-name name)]
+      (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
+        (response loc-with-path))
+      (status (response {:error "Location not found"}) 404))
+    (catch Exception e
+      (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
 
 (defn search-inventory [request]
   (let [query (get (:query-params request) "q")
@@ -163,7 +165,7 @@
   (GET "/inventory/location/:id" [id] (get-location-details id))
   (GET "/inventory/search" request (search-inventory request))
   (GET "/item/:id" [id] (get-item id))
-  (GET "/location/:name" [name] (get-location-by-name name))) ;; a new route
+  (GET "/location/:name" [name] (get-location-by-name name)))
 
 (def app
   (-> app-routes
