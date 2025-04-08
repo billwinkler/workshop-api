@@ -24,6 +24,7 @@
   (and (string? (:name loc))
        (string? (:type loc))
        (string? (:area loc))
+       (or (nil? (:label loc)) (string? (:label loc)))
        (or (nil? (:description loc)) (string? (:description loc)))
        (or (nil? (:parent_id loc)) (string? (:parent_id loc)))))
 
@@ -33,10 +34,12 @@
         loc-id-ok (string? (:location_id item))
         cat-ok (or (nil? (:category item)) (string? (:category item)))
         sup-ok (or (nil? (:supplier item)) (string? (:supplier item)))
+        part-ok (or (nil? (:supplier_part_no item)) (string? (:supplier_part_no item)))
+        url-ok (or (nil? (:supplier_item_url item)) (string? (:supplier_item_url item)))
         qty-ok (or (nil? (:quantity item)) (integer? (:quantity item)))
         notes-ok (or (nil? (:notes item)) (string? (:notes item)))
         acq-date-ok (or (nil? (:acquisition_date item)) (string? (:acquisition_date item)))
-        result (and name-ok desc-ok loc-id-ok cat-ok sup-ok qty-ok notes-ok acq-date-ok)]
+        result (and name-ok desc-ok loc-id-ok cat-ok sup-ok part-ok url-ok qty-ok notes-ok acq-date-ok)]
     result))
 
 (defn prepare-location [loc]
@@ -56,16 +59,16 @@
 
 (defn db-add-location [loc]
   (jdbc/execute-one! ds
-                     ["INSERT INTO locations (id, name, description, type, parent_id, area, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-                      (:id loc) (:name loc) (:description loc) (:type loc) (:parent_id loc) (:area loc) (:created_at loc) (:updated_at loc)]
+                     ["INSERT INTO locations (id, label, name, type, description, parent_id, area, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                      (:id loc) (:label loc) (:name loc) (:type loc) (:description loc) (:parent_id loc) (:area loc) (:created_at loc) (:updated_at loc)]
                      {:return-keys true}))
 
 (defn db-add-item [item]
   (jdbc/execute-one! ds
-                     ["INSERT INTO items (id, name, category, supplier, description, notes, quantity, location_id, acquisition_date, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                      (:id item) (:name item) (:category item) (:supplier item) (:description item) (:notes item) (:quantity item) (:location_id item) (:acquisition_date item) (:created_at item) (:updated_at item)]
+                     ["INSERT INTO items (id, name, category, supplier, supplier_part_no, supplier_item_url, description, notes, quantity, location_id, acquisition_date, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                      (:id item) (:name item) (:category item) (:supplier item) (:supplier_part_no item) (:supplier_item_url item) (:description item) (:notes item) (:quantity item) (:location_id item) (:acquisition_date item) (:created_at item) (:updated_at item)]
                      {:return-keys true}))
 
 (defn db-get-location [id]
