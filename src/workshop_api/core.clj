@@ -151,25 +151,46 @@
     (status (response {:error "Item not found"}) 404)))
 
 (defn get-location-by-name-or-label [param]
-  (let [normalized-param (str/replace param "+" " ")]
+  (let [normalized-param (str/replace param "+" " ")
+        url-pattern (re-pattern "/inventory/location/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
+        uuid-pattern (re-pattern "^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
+        url-match (re-find url-pattern normalized-param)
+        uuid-match (re-find uuid-pattern normalized-param)
+        id (or (when url-match (second url-match))
+               (when uuid-match (second uuid-match)))]
     (println "Fetching location by name or label:" normalized-param)
     (try
-      ;; Try name first
-      (if-let [loc (db-get-location-by-name normalized-param)]
-        (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
-          (println "Found location by name:" loc-with-path)
-          (response loc-with-path))
-        ;; If no name match, try label
-        (if-let [loc (db-get-location-by-label normalized-param)]
+      (or
+        ;; If param is a UUID (from URL or standalone), query by ID
+        (when id
+          (if-let [loc (db-get-location id)]
+            (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
+              (println "Found location by ID:" loc-with-path)
+              (response loc-with-path))
+            (do
+              (println "Location not found for ID:" id)
+              (status (response {:error "Location not found" :id id}) 404))))
+
+        ;; Try name
+        (when-let [loc (db-get-location-by-name normalized-param)]
+          (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
+            (println "Found location by name:" loc-with-path)
+            (response loc-with-path)))
+
+        ;; Try label
+        (when-let [loc (db-get-location-by-label normalized-param)]
           (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
             (println "Found location by label:" loc-with-path)
-            (response loc-with-path))
-          (do
-            (println "Location not found for name or label:" normalized-param)
-            (status (response {:error "Location not found"}) 404))))
+            (response loc-with-path)))
+
+        ;; If nothing matches
+        (do
+          (println "Location not found for name or label:" normalized-param)
+          (status (response {:error "Location not found"}) 404)))
       (catch Exception e
         (println "Error fetching location:" (.getMessage e))
         (status (response {:error "Internal server error" :message (.getMessage e)}) 500)))))
+
 
 (defn search-inventory [request]
   (let [query (get (:query-params request) "q")
