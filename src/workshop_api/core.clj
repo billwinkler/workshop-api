@@ -81,6 +81,11 @@
                      ["SELECT * FROM locations WHERE name = ?" name]
                      {:builder-fn rs/as-unqualified-lower-maps}))
 
+(defn db-get-location-by-label [label]
+  (jdbc/execute-one! ds
+                     ["SELECT * FROM locations WHERE label = ?" label]
+                     {:builder-fn rs/as-unqualified-lower-maps}))
+
 (defn db-get-items-by-location [location-id]
   (jdbc/execute! ds
                  ["SELECT * FROM items WHERE location_id = ?" location-id]
@@ -145,18 +150,23 @@
       (response item-with-path))
     (status (response {:error "Item not found"}) 404)))
 
-;; Upgraded handling of how spaces may be encoded
-(defn get-location-by-name [name]
-  (let [normalized-name (str/replace name "+" " ")]
-    (println "Fetching location by name:" normalized-name)
+(defn get-location-by-name-or-label [param]
+  (let [normalized-param (str/replace param "+" " ")]
+    (println "Fetching location by name or label:" normalized-param)
     (try
-      (if-let [loc (db-get-location-by-name normalized-name)]
+      ;; Try name first
+      (if-let [loc (db-get-location-by-name normalized-param)]
         (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
-          (println "Found location:" loc-with-path)
+          (println "Found location by name:" loc-with-path)
           (response loc-with-path))
-        (do
-          (println "Location not found for name:" normalized-name)
-          (status (response {:error "Location not found"}) 404)))
+        ;; If no name match, try label
+        (if-let [loc (db-get-location-by-label normalized-param)]
+          (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
+            (println "Found location by label:" loc-with-path)
+            (response loc-with-path))
+          (do
+            (println "Location not found for name or label:" normalized-param)
+            (status (response {:error "Location not found"}) 404))))
       (catch Exception e
         (println "Error fetching location:" (.getMessage e))
         (status (response {:error "Internal server error" :message (.getMessage e)}) 500)))))
@@ -174,7 +184,7 @@
   (GET "/inventory/location/:id" [id] (get-location-details id))
   (GET "/inventory/search" request (search-inventory request))
   (GET "/item/:id" [id] (get-item id))
-  (GET "/location/:name" [name] (get-location-by-name name)))
+  (GET "/location/:param" [param] (get-location-by-name-or-label param)))
 
 (def app
   (-> app-routes
