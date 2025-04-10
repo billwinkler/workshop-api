@@ -213,5 +213,14 @@
       (wrap-json-body {:keywords? true})
       wrap-json-response))
 
+
+(defn test-connection []
+  (try
+    (jdbc/execute-one! ds ["SELECT 1"])
+    (println "Database connection successful")
+    (catch Exception e
+      (println "Database connection failed:" (.getMessage e)))))
+
 (defn -main []
+  (test-connection)
   (jetty/run-jetty app {:port 3000 :join? false}))
