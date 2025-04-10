@@ -11,7 +11,7 @@
   (:import [java.sql Timestamp]
            [java.time Instant]))
 
-(def db-spec {:dbtype "postgresql" :dbname "workshop_inventory" :host "localhost" :user "billwinkler" :password ""})
+(def db-spec {:dbtype "postgresql" :dbname "workshop_inventory" :host "localhost" :user "billwinkler" :password (System/getenv "DB_PASSWORD")})
 (def ds (jdbc/get-datasource db-spec))
 
 (defn generate-id [] (str (java.util.UUID/randomUUID)))
