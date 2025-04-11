@@ -99,14 +99,6 @@
                        WHERE i.id = ?" id]
                      {:builder-fn rs/as-unqualified-lower-maps}))
 
-(defn db-get-all-items []
-  (let [items (jdbc/execute! ds
-                            ["SELECT i.*, l.name AS location_name, l.parent_id
-                              FROM items i
-                              JOIN locations l ON i.location_id = l.id"]
-                            {:builder-fn rs/as-unqualified-lower-maps})]
-    (map #(assoc % :location_path (get-location-path (:location_id %))) items)))
-
 (defn get-location-path [loc-id]
   (letfn [(build-path [id acc]
             (if-let [loc (db-get-location id)]
@@ -115,6 +107,15 @@
                 (build-path (:parent_id loc) (conj acc (:name loc))))
               acc))]
     (str/join " > " (build-path loc-id []))))
+
+(defn db-get-all-items []
+  (let [items (jdbc/execute! ds
+                            ["SELECT i.*, l.name AS location_name, l.parent_id
+                              FROM items i
+                              JOIN locations l ON i.location_id = l.id"]
+                            {:builder-fn rs/as-unqualified-lower-maps})]
+    (map #(assoc % :location_path (get-location-path (:location_id %))) items)))
+
 
 (defn db-search-items [query]
   (let [search-term (str "%" query "%")
