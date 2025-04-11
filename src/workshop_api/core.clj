@@ -99,6 +99,14 @@
                        WHERE i.id = ?" id]
                      {:builder-fn rs/as-unqualified-lower-maps}))
 
+(defn db-get-all-items []
+  (let [items (jdbc/execute! ds
+                            ["SELECT i.*, l.name AS location_name, l.parent_id
+                              FROM items i
+                              JOIN locations l ON i.location_id = l.id"]
+                            {:builder-fn rs/as-unqualified-lower-maps})]
+    (map #(assoc % :location_path (get-location-path (:location_id %))) items)))
+
 (defn get-location-path [loc-id]
   (letfn [(build-path [id acc]
             (if-let [loc (db-get-location id)]
@@ -150,6 +158,10 @@
       (response item-with-path))
     (status (response {:error "Item not found"}) 404)))
 
+(defn get-all-items [_request]
+  (let [items (db-get-all-items)]
+    (response items)))
+
 (defn get-location-by-name-or-label [param]
   (let [normalized-param (str/replace param "+" " ")
         url-pattern (re-pattern "/inventory/location/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
@@ -161,32 +173,32 @@
     (println "Fetching location by name or label:" normalized-param)
     (try
       (or
-        ;; If param is a UUID (from URL or standalone), query by ID
-        (when id
-          (if-let [loc (db-get-location id)]
-            (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
-              (println "Found location by ID:" loc-with-path)
-              (response loc-with-path))
-            (do
-              (println "Location not found for ID:" id)
-              (status (response {:error "Location not found" :id id}) 404))))
+       ;; If param is a UUID (from URL or standalone), query by ID
+       (when id
+         (if-let [loc (db-get-location id)]
+           (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
+             (println "Found location by ID:" loc-with-path)
+             (response loc-with-path))
+           (do
+             (println "Location not found for ID:" id)
+             (status (response {:error "Location not found" :id id}) 404))))
 
-        ;; Try name
-        (when-let [loc (db-get-location-by-name normalized-param)]
-          (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
-            (println "Found location by name:" loc-with-path)
-            (response loc-with-path)))
+       ;; Try name
+       (when-let [loc (db-get-location-by-name normalized-param)]
+         (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
+           (println "Found location by name:" loc-with-path)
+           (response loc-with-path)))
 
-        ;; Try label
-        (when-let [loc (db-get-location-by-label normalized-param)]
-          (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
-            (println "Found location by label:" loc-with-path)
-            (response loc-with-path)))
+       ;; Try label
+       (when-let [loc (db-get-location-by-label normalized-param)]
+         (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
+           (println "Found location by label:" loc-with-path)
+           (response loc-with-path)))
 
-        ;; If nothing matches
-        (do
-          (println "Location not found for name or label:" normalized-param)
-          (status (response {:error "Location not found"}) 404)))
+       ;; If nothing matches
+       (do
+         (println "Location not found for name or label:" normalized-param)
+         (status (response {:error "Location not found"}) 404)))
       (catch Exception e
         (println "Error fetching location:" (.getMessage e))
         (status (response {:error "Internal server error" :message (.getMessage e)}) 500)))))
@@ -205,7 +217,8 @@
   (GET "/inventory/location/:id" [id] (get-location-details id))
   (GET "/inventory/search" request (search-inventory request))
   (GET "/item/:id" [id] (get-item id))
-  (GET "/location/:param" [param] (get-location-by-name-or-label param)))
+  (GET "/location/:param" [param] (get-location-by-name-or-label param))
+  (GET "/items" request (get-all-items request)))
 
 (def app
   (-> app-routes
