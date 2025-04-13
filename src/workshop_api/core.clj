@@ -213,13 +213,13 @@
     (response items)))
 
 (defroutes app-routes
-  (POST "/location" request (add-location request))
-  (POST "/item" request (add-item request))
-  (GET "/inventory/location/:id" [id] (get-location-details id))
-  (GET "/inventory/search" request (search-inventory request))
-  (GET "/item/:id" [id] (get-item id))
-  (GET "/location/:param" [param] (get-location-by-name-or-label param))
-  (GET "/items" request (get-all-items request)))
+  (POST "/api/location" request (add-location request))
+  (POST "/api/item" request (add-item request))
+  (GET "/api/inventory/location/:id" [id] (get-location-details id))
+  (GET "/api/inventory/search" request (search-inventory request))
+  (GET "/api/item/:id" [id] (get-item id))
+  (GET "/api/items" request (get-all-items request))
+  (GET "/api/location/:param" [param] (get-location-by-name-or-label param)))
 
 (def app
   (-> app-routes
