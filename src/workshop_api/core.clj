@@ -5,7 +5,7 @@
             [ring.middleware.json :refer [wrap-json-body wrap-json-response]]
             [ring.middleware.params :refer [wrap-params]]
             [ring.util.response :refer [response status]]
-            [ring.middleware.cors :refer [wrap-cors]] ;; added CORS for dev
+            [ring.middleware.cors :refer [wrap-cors]]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [clojure.string :as str])
@@ -43,20 +43,40 @@
         result (and name-ok desc-ok loc-id-ok cat-ok sup-ok part-ok url-ok qty-ok notes-ok acq-date-ok)]
     result))
 
+(defn valid-partial-item? [item]
+  (and (or (nil? (:name item)) (string? (:name item)))
+       (or (nil? (:description item)) (string? (:description item)))
+       (or (nil? (:location_id item)) (string? (:location_id item)))
+       (or (nil? (:category item)) (string? (:category item)))
+       (or (nil? (:supplier item)) (string? (:supplier item)))
+       (or (nil? (:supplier_part_no item)) (string? (:supplier_part_no item)))
+       (or (nil? (:supplier_item_url item)) (string? (:supplier_item_url item)))
+       (or (nil? (:quantity item)) (integer? (:quantity item)))
+       (or (nil? (:notes item)) (string? (:notes item)))
+       (or (nil? (:acquisition_date item)) (string? (:acquisition_date item)))))
+
+(defn valid-partial-location? [loc]
+  (and (or (nil? (:name loc)) (string? (:name loc)))
+       (or (nil? (:type loc)) (string? (:type loc)))
+       (or (nil? (:area loc)) (string? (:area loc)))
+       (or (nil? (:label loc)) (string? (:label loc)))
+       (or (nil? (:description loc)) (string? (:description loc)))
+       (or (nil? (:parent_id loc)) (string? (:parent_id loc)))))
+
 (defn prepare-location [loc]
   (let [now (current-timestamp)]
     (-> loc
         (assoc :id (generate-id))
-        (assoc :created_at now)  ;; Changed to underscore
-        (assoc :updated_at now))))  ;; Changed to underscore
+        (assoc :created_at now)
+        (assoc :updated_at now))))
 
 (defn prepare-item [item]
   (let [now (current-timestamp)]
     (-> item
         (assoc :id (generate-id))
         (assoc :quantity (or (:quantity item) 1))
-        (assoc :created_at now)  ;; Changed to underscore
-        (assoc :updated_at now))))  ;; Changed to underscore
+        (assoc :created_at now)
+        (assoc :updated_at now))))
 
 (defn db-add-location [loc]
   (jdbc/execute-one! ds
@@ -71,6 +91,36 @@
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                       (:id item) (:name item) (:category item) (:supplier item) (:supplier_part_no item) (:supplier_item_url item) (:description item) (:notes item) (:quantity item) (:location_id item) (:acquisition_date item) (:created_at item) (:updated_at item)]
                      {:return-keys true}))
+
+(defn db-update-item [id item]
+  (let [now (current-timestamp)
+        updateable-fields (select-keys item [:name :category :supplier :supplier_part_no :supplier_item_url :description :notes :quantity :location_id :acquisition_date])
+        updateable-fields (assoc updateable-fields :updated_at now)]
+    (jdbc/execute-one! ds
+                       (into ["UPDATE items SET "
+                              (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
+                              " WHERE id = ?"]
+                             (concat (vals updateable-fields) [id]))
+                       {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))
+
+(defn db-update-location [id loc]
+  (let [now (current-timestamp)
+        updateable-fields (select-keys loc [:label :name :type :description :parent_id :area])
+        updateable-fields (assoc updateable-fields :updated_at now)]
+    (jdbc/execute-one! ds
+                       (into ["UPDATE locations SET "
+                              (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
+                              " WHERE id = ?"]
+                             (concat (vals updateable-fields) [id]))
+                       {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))
+
+(defn db-delete-item [id]
+  (jdbc/execute-one! ds
+                     ["DELETE FROM items WHERE id = ?" id]))
+
+(defn db-delete-location [id]
+  (jdbc/execute-one! ds
+                     ["DELETE FROM locations WHERE id = ?" id]))
 
 (defn db-get-location [id]
   (jdbc/execute-one! ds
@@ -100,6 +150,11 @@
                        WHERE i.id = ?" id]
                      {:builder-fn rs/as-unqualified-lower-maps}))
 
+(defn db-check-location-items [id]
+  (jdbc/execute-one! ds
+                     ["SELECT COUNT(*) AS count FROM items WHERE location_id = ?" id]
+                     {:builder-fn rs/as-unqualified-lower-maps}))
+
 (defn get-location-path [loc-id]
   (letfn [(build-path [id acc]
             (if-let [loc (db-get-location id)]
@@ -117,6 +172,11 @@
                             {:builder-fn rs/as-unqualified-lower-maps})]
     (map #(assoc % :location_path (get-location-path (:location_id %))) items)))
 
+(defn db-get-all-locations []
+  (let [locations (jdbc/execute! ds
+                                ["SELECT * FROM locations"]
+                                {:builder-fn rs/as-unqualified-lower-maps})]
+    (map #(assoc % :location_path (get-location-path (:id %))) locations)))
 
 (defn db-search-items [query]
   (let [search-term (str "%" query "%")
@@ -134,8 +194,28 @@
     (if (valid-location? loc)
       (let [new-loc (prepare-location loc)]
         (db-add-location new-loc)
-        (response {:status "success" :location new-loc}))
+        (response new-loc))
       (status (response {:error "Invalid location format" :data loc}) 400))))
+
+(defn update-location [request id]
+  (let [loc (keywordize-keys (:body request))]
+    (if (valid-partial-location? loc)
+      (if-let [existing-loc (db-get-location id)]
+        (if-let [updated-loc (db-update-location id loc)]
+          (response updated-loc)
+          (status (response {:error "Failed to update location"}) 500))
+        (status (response {:error "Location not found"}) 404))
+      (status (response {:error "Invalid location format" :data loc}) 400))))
+
+(defn delete-location [id]
+  (if-let [loc (db-get-location id)]
+    (let [{item-count :count} (db-check-location-items id)]
+      (if (zero? item-count)
+        (do
+          (db-delete-location id)
+          (response {:status "success"}))
+        (status (response {:error "Cannot delete location with items"}) 400)))
+    (status (response {:error "Location not found"}) 404)))
 
 (defn add-item [request]
   (let [item (keywordize-keys (:body request))]
@@ -143,10 +223,27 @@
       (try
         (let [new-item (prepare-item item)]
           (db-add-item new-item)
-          (response {:status "success" :item new-item}))
+          (response new-item))
         (catch Exception e
           (status (response {:error "Database error" :message (.getMessage e)}) 400)))
       (status (response {:error "Invalid item format" :data item}) 400))))
+
+(defn update-item [request id]
+  (let [item (keywordize-keys (:body request))]
+    (if (valid-partial-item? item)
+      (if-let [existing-item (db-get-item id)]
+        (if-let [updated-item (db-update-item id item)]
+          (response updated-item)
+          (status (response {:error "Failed to update item"}) 500))
+        (status (response {:error "Item not found"}) 404))
+      (status (response {:error "Invalid item format" :data item}) 400))))
+
+(defn delete-item [id]
+  (if-let [item (db-get-item id)]
+    (do
+      (db-delete-item id)
+      (response {:status "success"}))
+    (status (response {:error "Item not found"}) 404)))
 
 (defn get-location-details [id]
   (if-let [loc (db-get-location id)]
@@ -164,6 +261,10 @@
   (let [items (db-get-all-items)]
     (response items)))
 
+(defn get-all-locations [_request]
+  (let [locations (db-get-all-locations)]
+    (response locations)))
+
 (defn get-location-by-name-or-label [param]
   (let [normalized-param (str/replace param "+" " ")
         url-pattern (re-pattern "/inventory/location/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
@@ -175,7 +276,6 @@
     (println "Fetching location by name or label:" normalized-param)
     (try
       (or
-       ;; If param is a UUID (from URL or standalone), query by ID
        (when id
          (if-let [loc (db-get-location id)]
            (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
@@ -184,27 +284,20 @@
            (do
              (println "Location not found for ID:" id)
              (status (response {:error "Location not found" :id id}) 404))))
-
-       ;; Try name
        (when-let [loc (db-get-location-by-name normalized-param)]
          (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
            (println "Found location by name:" loc-with-path)
            (response loc-with-path)))
-
-       ;; Try label
        (when-let [loc (db-get-location-by-label normalized-param)]
          (let [loc-with-path (assoc loc :location_path (get-location-path (:id loc)))]
            (println "Found location by label:" loc-with-path)
            (response loc-with-path)))
-
-       ;; If nothing matches
        (do
          (println "Location not found for name or label:" normalized-param)
          (status (response {:error "Location not found"}) 404)))
       (catch Exception e
         (println "Error fetching location:" (.getMessage e))
         (status (response {:error "Internal server error" :message (.getMessage e)}) 500)))))
-
 
 (defn search-inventory [request]
   (let [query (get (:query-params request) "q")
@@ -214,12 +307,17 @@
     (response items)))
 
 (defroutes app-routes
-  (POST "/api/location" request (add-location request))
-  (POST "/api/item" request (add-item request))
+  (POST "/api/locations" request (add-location request))
+  (PATCH "/api/locations/:id" [id :as request] (update-location request id))
+  (DELETE "/api/locations/:id" [id] (delete-location id))
+  (POST "/api/items" request (add-item request))
+  (PATCH "/api/items/:id" [id :as request] (update-item request id))
+  (DELETE "/api/items/:id" [id] (delete-item id))
   (GET "/api/inventory/location/:id" [id] (get-location-details id))
   (GET "/api/inventory/search" request (search-inventory request))
   (GET "/api/item/:id" [id] (get-item id))
   (GET "/api/items" request (get-all-items request))
+  (GET "/api/locations" request (get-all-locations request))
   (GET "/api/location/:param" [param] (get-location-by-name-or-label param)))
 
 (def app
@@ -229,7 +327,6 @@
       wrap-json-response
       (wrap-cors :access-control-allow-origin [#".*"]
                  :access-control-allow-methods [:get :post :patch :delete])))
-
 
 (defn test-connection []
   (try
