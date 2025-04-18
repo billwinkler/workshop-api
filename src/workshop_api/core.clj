@@ -3,8 +3,9 @@
   (:require [ring.adapter.jetty :as jetty]
             [compojure.core :refer :all]
             [ring.middleware.json :refer [wrap-json-body wrap-json-response]]
-            [ring.middleware.params :refer [wrap-params]]  ;; Added
+            [ring.middleware.params :refer [wrap-params]]
             [ring.util.response :refer [response status]]
+            [ring.middleware.cors :refer [wrap-cors]] ;; added CORS for dev
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [clojure.string :as str])
@@ -223,9 +224,11 @@
 
 (def app
   (-> app-routes
-      wrap-params  ;; Added wrap-params
+      wrap-params
       (wrap-json-body {:keywords? true})
-      wrap-json-response))
+      wrap-json-response
+      (wrap-cors :access-control-allow-origin [#".*"]
+                 :access-control-allow-methods [:get :post :patch :delete])))
 
 
 (defn test-connection []
@@ -236,5 +239,6 @@
       (println "Database connection failed:" (.getMessage e)))))
 
 (defn -main []
+  (println "Starting workshop-api v0.1.0")
   (test-connection)
   (jetty/run-jetty app {:port 3000 :join? false}))
