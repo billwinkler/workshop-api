@@ -252,10 +252,14 @@
     (status (response {:error "Location not found"}) 404)))
 
 (defn get-item [id]
-  (if-let [item (db-get-item id)]
-    (let [item-with-path (assoc item :location_path (get-location-path (:location_id item)))]
-      (response item-with-path))
-    (status (response {:error "Item not found"}) 404)))
+  (try
+    (if-let [item (db-get-item id)]
+      (let [item-with-path (assoc item :location_path (get-location-path (:location_id item)))]
+        (response item-with-path))
+      (status (response {:error "Item not found"}) 404))
+    (catch Exception e
+      (println "Error in get-item for ID:" id "Error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
+      (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
 
 (defn get-all-items [_request]
   (let [items (db-get-all-items)]
