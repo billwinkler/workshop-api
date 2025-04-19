@@ -270,14 +270,34 @@
     (response locations)))
 
 (defn build-location-hierarchy []
-  (let [locations (jdbc/execute! ds ["SELECT id, label, name, type, description, parent_id, area, created_at, updated_at FROM locations"]
+  (let [locations (jdbc/execute! ds
+                                 ["SELECT id, label, name, type, description, parent_id, area, created_at, updated_at FROM locations"]
                                  {:builder-fn rs/as-unqualified-lower-maps})
         loc-map (reduce (fn [acc loc] (assoc acc (:id loc) (assoc loc :children []))) {} locations)]
-    (let [tree (reduce (fn [acc loc] (if (:parent_id loc) (update-in acc [(:parent_id loc) :children] #(conj % (get acc (:id loc)))) acc)) loc-map locations)]
-      (->> tree (vals) (filter #(nil? (:parent_id %))) (map #(dissoc % :created_at :updated_at :location_path)) (sort-by :name) vec))))
+    (println "Fetched" (count locations) "locations")
+    (println "Root locations:" (count (filter #(nil? (:parent_id %)) locations)))
+    (letfn [(build-node [loc-id]
+              (println "Building node for loc-id:" loc-id)
+              (let [loc (get loc-map loc-id)]
+                (if-not loc
+                  (do
+                    (println "Location not found for id:" loc-id)
+                    {:children []})
+                  (let [children (filter #(= (:parent_id %) loc-id) (vals loc-map))
+                        children-with-hierarchy (map (fn [child]
+                                                      (assoc child :children (build-node (:id child))))
+                                                    children)]
+                    (println "Found" (count children) "children for" loc-id)
+                    (assoc loc :children (vec (sort-by :name children-with-hierarchy)))))))]
+      (->> (vals loc-map)
+           (filter #(nil? (:parent_id %)))
+           (map :id) ; Extract :id before passing to build-node
+           (map build-node)
+           (map #(dissoc % :created_at :updated_at :location_path))
+           (sort-by :name)
+           vec))))
 
 (defn get-location-hierarchy [_request]
-  (println "Handling request to /api/locations/hierarchy")
   (try (let [hierarchy (build-location-hierarchy)]
          (response hierarchy))
        (catch Exception e (println "Error in get-location-hierarchy:" (.getMessage e))
