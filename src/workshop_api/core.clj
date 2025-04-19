@@ -269,6 +269,20 @@
   (let [locations (db-get-all-locations)]
     (response locations)))
 
+(defn build-location-hierarchy []
+  (let [locations (jdbc/execute! ds ["SELECT id, label, name, type, description, parent_id, area, created_at, updated_at FROM locations"]
+                                 {:builder-fn rs/as-unqualified-lower-maps})
+        loc-map (reduce (fn [acc loc] (assoc acc (:id loc) (assoc loc :children []))) {} locations)]
+    (let [tree (reduce (fn [acc loc] (if (:parent_id loc) (update-in acc [(:parent_id loc) :children] #(conj % (get acc (:id loc)))) acc)) loc-map locations)]
+      (->> tree (vals) (filter #(nil? (:parent_id %))) (map #(dissoc % :created_at :updated_at :location_path)) (sort-by :name) vec))))
+
+(defn get-location-hierarchy [_request]
+  (println "Handling request to /api/locations/hierarchy")
+  (try (let [hierarchy (build-location-hierarchy)]
+         (response hierarchy))
+       (catch Exception e (println "Error in get-location-hierarchy:" (.getMessage e))
+              (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
+
 (defn get-location-by-name-or-label [param]
   (let [normalized-param (str/replace param "+" " ")
         url-pattern (re-pattern "/locations/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
@@ -314,6 +328,7 @@
   (POST "/api/locations" request (add-location request))
   (PATCH "/api/locations/:id" [id :as request] (update-location request id))
   (DELETE "/api/locations/:id" [id] (delete-location id))
+  (GET "/api/locations/hierarchy" request (get-location-hierarchy request))  
   (GET "/api/locations/:id" [id] (get-location-details id))
   (POST "/api/items" request (add-item request))
   (PATCH "/api/items/:id" [id :as request] (update-item request id))
@@ -322,7 +337,10 @@
   (GET "/api/search" request (search-inventory request))
   (GET "/api/items" request (get-all-items request))
   (GET "/api/locations" request (get-all-locations request))
-  (GET "/api/location/:param" [param] (get-location-by-name-or-label param)))
+  (GET "/api/location/:param" [param] (get-location-by-name-or-label param))
+  (ANY "*" request
+       (println "Unmatched request:" (:uri request))
+       (status (response {:error "Route not found" :uri (:uri request)}) 404)))
 
 (def app
   (-> app-routes
