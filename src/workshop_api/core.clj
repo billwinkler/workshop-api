@@ -270,38 +270,75 @@
     (response locations)))
 
 (defn build-location-hierarchy []
-  (let [locations (jdbc/execute! ds
-                                 ["SELECT id, label, name, type, description, parent_id, area, created_at, updated_at FROM locations"]
-                                 {:builder-fn rs/as-unqualified-lower-maps})
-        loc-map (reduce (fn [acc loc] (assoc acc (:id loc) (assoc loc :children []))) {} locations)]
-    (println "Fetched" (count locations) "locations")
-    (println "Root locations:" (count (filter #(nil? (:parent_id %)) locations)))
-    (letfn [(build-node [loc-id]
-              (println "Building node for loc-id:" loc-id)
-              (let [loc (get loc-map loc-id)]
-                (if-not loc
+  (try
+    (let [locations (jdbc/execute! ds
+                                   ["SELECT id, label, name, type, description, parent_id, area, created_at, updated_at FROM locations"]
+                                   {:builder-fn rs/as-unqualified-lower-maps})
+          sanitized-locations (map #(dissoc % :children) locations)
+          loc-map (reduce (fn [acc loc] (assoc acc (:id loc) (assoc loc :children []))) {} sanitized-locations)]
+;;      (println "Fetched" (count locations) "locations")
+;;      (println "Root locations:" (count (filter #(nil? (:parent_id %)) locations)))
+      (letfn [(build-node [loc-id visited]
+  ;;              (println "Building node for loc-id:" loc-id)
+                (if (contains? visited loc-id)
                   (do
-                    (println "Location not found for id:" loc-id)
+                    (println "Circular reference detected at loc-id:" loc-id)
                     {:children []})
-                  (let [children (filter #(= (:parent_id %) loc-id) (vals loc-map))
-                        children-with-hierarchy (map (fn [child]
-                                                      (assoc child :children (build-node (:id child))))
-                                                    children)]
-                    (println "Found" (count children) "children for" loc-id)
-                    (assoc loc :children (vec (sort-by :name children-with-hierarchy)))))))]
-      (->> (vals loc-map)
-           (filter #(nil? (:parent_id %)))
-           (map :id) ; Extract :id before passing to build-node
-           (map build-node)
-           (map #(dissoc % :created_at :updated_at :location_path))
-           (sort-by :name)
-           vec))))
+                  (let [loc (get loc-map loc-id)]
+                    (if-not loc
+                      (do
+                        (println "Location not found for id:" loc-id)
+                        {:children []})
+                      (let [children (filter #(= (:parent_id %) loc-id) (vals loc-map))
+                            children-with-hierarchy (map #(build-node (:id %) (conj visited loc-id))
+                                                         children)]
+;;                        (println "Children type before vec:" (type children-with-hierarchy))
+                        (let [result (assoc loc :children (vec (sort-by :name children-with-hierarchy)))]
+;;                          (println "Children type after vec:" (type (:children result)))
+                          result))))))]
+        (->> (vals loc-map)
+             (filter #(nil? (:parent_id %)))
+             (map :id)
+             (map #(build-node % #{}))
+             (map #(select-keys % [:id :label :name :type :description :parent_id :area :children]))
+             (sort-by :name)
+             vec)))
+    (catch Exception e
+      (println "Error building location hierarchy:" (.getMessage e))
+      (throw (ex-info "Failed to build location hierarchy" {:error (.getMessage e)})))))
 
 (defn get-location-hierarchy [_request]
   (try (let [hierarchy (build-location-hierarchy)]
          (response hierarchy))
        (catch Exception e (println "Error in get-location-hierarchy:" (.getMessage e))
               (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
+
+(defn descend-hierarchy
+  "Recursively descends the location hierarchy to retrieve the node or subtree at the specified path.
+   Args:
+     hierarchy-or-node: The full hierarchy (vector of root nodes) or a single node map.
+     path: A sequence of indices (e.g., [0 0] to get the first child of the first child of the first root).
+   Returns:
+     The node or subtree at the path, or nil if the path is invalid."
+  [hierarchy-or-node path]
+  (letfn [(descend [node path]
+            (println "Descending at path" path "node type" (type node) "children type" (type (:children node)))
+            (cond
+              (empty? path) node
+              (or (not (map? node)) (not (:children node))) nil
+              (not (or (vector? (:children node)) (seq? (:children node))))
+              (do
+                (println "Warning: :children is not a sequence at path" path "type:" (type (:children node)) "value:" (:children node))
+                nil)
+              :else (let [index (first path)]
+                      (if (and (integer? index) (>= index 0) (< index (count (:children node))))
+                        (descend (nth (:children node) index) (rest path))
+                        nil))))]
+    (if (vector? hierarchy-or-node)
+      (if (and (seq path) (integer? (first path)) (>= (first path) 0) (< (first path) (count hierarchy-or-node)))
+        (descend (nth hierarchy-or-node (first path)) (rest path))
+        nil)
+      (descend hierarchy-or-node path))))
 
 (defn get-location-by-name-or-label [param]
   (let [normalized-param (str/replace param "+" " ")
