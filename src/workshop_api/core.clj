@@ -27,6 +27,7 @@
        (string? (:area loc))
        (or (nil? (:label loc)) (string? (:label loc)))
        (or (nil? (:description loc)) (string? (:description loc)))
+       (or (nil? (:contents_summary loc)) (string? (:contents_summary loc)))
        (or (nil? (:parent_id loc)) (string? (:parent_id loc)))))
 
 (defn valid-item? [item]
@@ -61,6 +62,7 @@
        (or (nil? (:area loc)) (string? (:area loc)))
        (or (nil? (:label loc)) (string? (:label loc)))
        (or (nil? (:description loc)) (string? (:description loc)))
+       (or (nil? (:contents_summary loc)) (string? (:contents_summary loc)))
        (or (nil? (:parent_id loc)) (string? (:parent_id loc)))))
 
 (defn prepare-location [loc]
@@ -80,9 +82,9 @@
 
 (defn db-add-location [loc]
   (jdbc/execute-one! ds
-                     ["INSERT INTO locations (id, label, name, type, description, parent_id, area, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                      (:id loc) (:label loc) (:name loc) (:type loc) (:description loc) (:parent_id loc) (:area loc) (:created_at loc) (:updated_at loc)]
+                     ["INSERT INTO locations (id, label, name, type, description, contents_summary, parent_id, area, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                      (:id loc) (:label loc) (:name loc) (:type loc) (:description loc) (:contents_summary loc) (:parent_id loc) (:area loc) (:created_at loc) (:updated_at loc)]
                      {:return-keys true}))
 
 (defn db-add-item [item]
@@ -96,16 +98,23 @@
   (let [now (current-timestamp)
         updateable-fields (select-keys item [:name :category :supplier :supplier_part_no :supplier_item_url :description :notes :quantity :location_id :acquisition_date])
         updateable-fields (assoc updateable-fields :updated_at now)]
-    (jdbc/execute-one! ds
-                       (into ["UPDATE items SET "
-                              (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
-                              " WHERE id = ?"]
-                             (concat (vals updateable-fields) [id]))
-                       {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))
+    (if (empty? (dissoc updateable-fields :updated_at))
+      (do
+        (println "No fields to update for item ID:" id)
+        nil)
+      (let [sql (str "UPDATE items SET "
+                     (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
+                     " WHERE id = ?")
+            params (concat (vals updateable-fields) [id])]
+        ;;(println "SQL Query:" sql)
+        ;;(println "Parameters:" params)
+        (jdbc/execute-one! ds
+                           (into [sql] params)
+                           {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))))
 
 (defn db-update-location [id loc]
   (let [now (current-timestamp)
-        updateable-fields (select-keys loc [:label :name :type :description :parent_id :area])
+        updateable-fields (select-keys loc [:label :name :type :description :contents_summary :parent_id :area])
         updateable-fields (assoc updateable-fields :updated_at now)]
     (jdbc/execute-one! ds
                        (into ["UPDATE locations SET "
@@ -230,13 +239,19 @@
 
 (defn update-item [request id]
   (let [item (keywordize-keys (:body request))]
-    (if (valid-partial-item? item)
-      (if-let [existing-item (db-get-item id)]
-        (if-let [updated-item (db-update-item id item)]
-          (response updated-item)
-          (status (response {:error "Failed to update item"}) 500))
-        (status (response {:error "Item not found"}) 404))
-      (status (response {:error "Invalid item format" :data item}) 400))))
+    (try
+      (if (valid-partial-item? item)
+        (if-let [existing-item (db-get-item id)]
+          (if-let [updated-item (db-update-item id item)]
+            (response updated-item)
+            (do
+              (println "Failed to update item in database for ID:" id "Item:" item)
+              (status (response {:error "No fields to update or failed to update item"}) 400)))
+          (status (response {:error "Item not found"}) 404))
+        (status (response {:error "Invalid item format" :data item}) 400))
+      (catch Exception e
+        (println "Error in update-item for ID:" id "Error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
+        (status (response {:error "Internal server error" :message (.getMessage e)}) 500)))))
 
 (defn delete-item [id]
   (if-let [item (db-get-item id)]
@@ -272,7 +287,7 @@
 (defn build-location-hierarchy []
   (try
     (let [locations (jdbc/execute! ds
-                                   ["SELECT id, label, name, type, description, parent_id, area, created_at, updated_at FROM locations"]
+                                   ["SELECT id, label, name, type, description, contents_summary, parent_id, area, created_at, updated_at FROM locations"]
                                    {:builder-fn rs/as-unqualified-lower-maps})
           sanitized-locations (map #(dissoc % :children) locations)
           loc-map (reduce (fn [acc loc] (assoc acc (:id loc) (assoc loc :children []))) {} sanitized-locations)]
@@ -300,7 +315,7 @@
              (filter #(nil? (:parent_id %)))
              (map :id)
              (map #(build-node % #{}))
-             (map #(select-keys % [:id :label :name :type :description :parent_id :area :children]))
+             (map #(select-keys % [:id :label :name :type :description :contents_summary :parent_id :area :children]))
              (sort-by :name)
              vec)))
     (catch Exception e
