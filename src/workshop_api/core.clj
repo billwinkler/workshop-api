@@ -9,7 +9,7 @@
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [clojure.string :as str]
-            [workshop-api.gemini-describe :as gemini] ; Import gemini-describe namespace
+            [workshop-api.gemini-describe :as gemini]
             [clojure.core.async :refer [go thread]]
             [cheshire.core :as json]
             [clojure.edn :as edn])
@@ -31,7 +31,6 @@
        (string? (:area loc))
        (or (nil? (:label loc)) (string? (:label loc)))
        (or (nil? (:description loc)) (string? (:description loc)))
-       (or (nil? (:contents_summary loc)) (string? (:contents_summary loc)))
        (or (nil? (:parent_id loc)) (string? (:parent_id loc)))))
 
 (defn valid-item? [item]
@@ -66,13 +65,22 @@
        (or (nil? (:area loc)) (string? (:area loc)))
        (or (nil? (:label loc)) (string? (:label loc)))
        (or (nil? (:description loc)) (string? (:description loc)))
-       (or (nil? (:contents_summary loc)) (string? (:contents_summary loc)))
        (or (nil? (:parent_id loc)) (string? (:parent_id loc)))))
 
 (defn valid-image? [image]
   (and (string? (:image_data image))
        (string? (:mime_type image))
        (or (nil? (:filename image)) (string? (:filename image)))))
+
+(defn valid-uuid? [s]
+  (try
+    (java.util.UUID/fromString s)
+    true
+    (catch IllegalArgumentException _ false)))
+
+(defn valid-analysis-config? [config]
+  (and (or (nil? (:model_version config)) (keyword? (:model_version config)))
+       (or (nil? (:analysis_type config)) (string? (:analysis_type config)))))
 
 (defn prepare-location [loc]
   (let [now (current-timestamp)]
@@ -99,15 +107,15 @@
 
 (defn db-add-location [loc]
   (jdbc/execute-one! ds
-                     ["INSERT INTO locations (id, label, name, type, description, contents_summary, parent_id, area, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                      (:id loc) (:label loc) (:name loc) (:type loc) (:description loc) (:contents_summary loc) (:parent_id loc) (:area loc) (:created_at loc) (:updated_at loc)]
+                     ["INSERT INTO locations (id, label, name, type, description, parent_id, area, created_at, updated_at)
+                       VALUES (?::uuid, ?, ?, ?, ?, ?::uuid, ?, ?, ?)"
+                      (:id loc) (:label loc) (:name loc) (:type loc) (:description loc) (:parent_id loc) (:area loc) (:created_at loc) (:updated_at loc)]
                      {:return-keys true}))
 
 (defn db-add-item [item]
   (jdbc/execute-one! ds
                      ["INSERT INTO items (id, name, category, supplier, supplier_part_no, supplier_item_url, description, notes, quantity, location_id, acquisition_date, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                       VALUES (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?::uuid, ?, ?, ?)"
                       (:id item) (:name item) (:category item) (:supplier item) (:supplier_part_no item) (:supplier_item_url item) (:description item) (:notes item) (:quantity item) (:location_id item) (:acquisition_date item) (:created_at item) (:updated_at item)]
                      {:return-keys true}))
 
@@ -155,36 +163,34 @@
         nil)
       (let [sql (str "UPDATE items SET "
                      (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
-                     " WHERE id = ?")
+                     " WHERE id = ?::uuid")
             params (concat (vals updateable-fields) [id])]
-        ;;(println "SQL Query:" sql)
-        ;;(println "Parameters:" params)
         (jdbc/execute-one! ds
                            (into [sql] params)
                            {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))))
 
 (defn db-update-location [id loc]
   (let [now (current-timestamp)
-        updateable-fields (select-keys loc [:label :name :type :description :contents_summary :parent_id :area])
+        updateable-fields (select-keys loc [:label :name :type :description :parent_id :area])
         updateable-fields (assoc updateable-fields :updated_at now)]
     (jdbc/execute-one! ds
                        (into ["UPDATE locations SET "
                               (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
-                              " WHERE id = ?"]
+                              " WHERE id = ?::uuid"]
                              (concat (vals updateable-fields) [id]))
                        {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))
 
 (defn db-delete-item [id]
   (jdbc/execute-one! ds
-                     ["DELETE FROM items WHERE id = ?" id]))
+                     ["DELETE FROM items WHERE id = ?::uuid" id]))
 
 (defn db-delete-location [id]
   (jdbc/execute-one! ds
-                     ["DELETE FROM locations WHERE id = ?" id]))
+                     ["DELETE FROM locations WHERE id = ?::uuid" id]))
 
 (defn db-get-location [id]
   (jdbc/execute-one! ds
-                     ["SELECT * FROM locations WHERE id = ?" id]
+                     ["SELECT * FROM locations WHERE id = ?::uuid" id]
                      {:builder-fn rs/as-unqualified-lower-maps}))
 
 (defn db-get-location-by-name [name]
@@ -199,7 +205,7 @@
 
 (defn db-get-items-by-location [location-id]
   (jdbc/execute! ds
-                 ["SELECT * FROM items WHERE location_id = ?" location-id]
+                 ["SELECT * FROM items WHERE location_id = ?::uuid" location-id]
                  {:builder-fn rs/as-unqualified-lower-maps}))
 
 (defn db-get-item [id]
@@ -207,13 +213,59 @@
                      ["SELECT i.*, l.name AS location_name, l.parent_id
                        FROM items i
                        JOIN locations l ON i.location_id = l.id
-                       WHERE i.id = ?" id]
+                       WHERE i.id = ?::uuid" id]
                      {:builder-fn rs/as-unqualified-lower-maps}))
 
 (defn db-check-location-items [id]
   (jdbc/execute-one! ds
-                     ["SELECT COUNT(*) AS count FROM items WHERE location_id = ?" id]
+                     ["SELECT COUNT(*) AS count FROM items WHERE location_id = ?::uuid" id]
                      {:builder-fn rs/as-unqualified-lower-maps}))
+
+(defn db-add-item-image [item-id image-id]
+  (try
+    (jdbc/execute-one! ds
+                       ["INSERT INTO item_images (item_id, image_id) VALUES (?::uuid, ?::uuid)"
+                        item-id image-id]
+                       {:return-keys true})
+    (catch Exception e
+      (throw (ex-info "Failed to link image to item" {:error (.getMessage e)})))))
+
+(defn db-add-location-image [location-id image-id]
+  (try
+    (jdbc/execute-one! ds
+                       ["INSERT INTO location_images (location_id, image_id) VALUES (?::uuid, ?::uuid)"
+                        location-id image-id]
+                       {:return-keys true})
+    (catch Exception e
+      (throw (ex-info "Failed to link image to location" {:error (.getMessage e)})))))
+
+(defn db-delete-item-image [item-id image-id]
+  (jdbc/execute-one! ds
+                     ["DELETE FROM item_images WHERE item_id = ?::uuid AND image_id = ?::uuid"
+                      item-id image-id]))
+
+(defn db-delete-location-image [location-id image-id]
+  (jdbc/execute-one! ds
+                     ["DELETE FROM location_images WHERE location_id = ?::uuid AND image_id = ?::uuid"
+                      location-id image-id]))
+
+(defn db-get-item-images [item-id]
+  (jdbc/execute! ds
+                 ["SELECT i.*
+                   FROM images i
+                   JOIN item_images ii ON i.id = ii.image_id
+                   WHERE ii.item_id = ?::uuid"
+                  item-id]
+                 {:builder-fn rs/as-unqualified-lower-maps}))
+
+(defn db-get-location-images [location-id]
+  (jdbc/execute! ds
+                 ["SELECT i.*
+                   FROM images i
+                   JOIN location_images li ON i.id = li.image_id
+                   WHERE li.location_id = ?::uuid"
+                  location-id]
+                 {:builder-fn rs/as-unqualified-lower-maps}))
 
 (defn get-location-path [loc-id]
   (letfn [(build-path [id acc]
@@ -313,27 +365,69 @@
 
 (defn get-location-details [id]
   (if-let [loc (db-get-location id)]
-    (let [items (db-get-items-by-location id)]
-      (response {:location loc :items items}))
+    (let [items (db-get-items-by-location id)
+          images (db-get-location-images id)]
+      (response {:location loc :items items :images images}))
     (status (response {:error "Location not found"}) 404)))
 
 (defn get-item [id]
   (try
     (if-let [item (db-get-item id)]
-      (let [item-with-path (assoc item :location_path (get-location-path (:location_id item)))]
-        (response item-with-path))
+      (let [item-with-path (assoc item :location_path (get-location-path (:location_id item)))
+            images (db-get-item-images id)]
+        (response (assoc item-with-path :images images)))
       (status (response {:error "Item not found"}) 404))
     (catch Exception e
       (println "Error in get-item for ID:" id "Error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
       (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
 
-(defn get-all-items [_request]
-  (let [items (db-get-all-items)]
-    (response items)))
+(defn add-item-image [request]
+  (let [{:keys [item_id image_id]} (keywordize-keys (:body request))]
+    (if (and (valid-uuid? item_id) (valid-uuid? image_id))
+      (try
+        (if (and (db-get-item item_id) (db-get-image image_id))
+          (do
+            (db-add-item-image item_id image_id)
+            (response {:status "success" :item_id item_id :image_id image_id}))
+          (status (response {:error "Item or image not found"}) 404))
+        (catch Exception e
+          (status (response {:error "Database error" :message (.getMessage e)}) 400)))
+      (status (response {:error "Invalid UUID format" :data {:item_id item_id :image_id image_id}}) 400))))
 
-(defn get-all-locations [_request]
-  (let [locations (db-get-all-locations)]
-    (response locations)))
+(defn add-location-image [request]
+  (let [{:keys [location_id image_id]} (keywordize-keys (:body request))]
+    (if (and (valid-uuid? location_id) (valid-uuid? image_id))
+      (try
+        (if (and (db-get-location location_id) (db-get-image image_id))
+          (do
+            (db-add-location-image location_id image_id)
+            (response {:status "success" :location_id location_id :image_id image_id}))
+          (status (response {:error "Location or image not found"}) 404))
+        (catch Exception e
+          (status (response {:error "Database error" :message (.getMessage e)}) 400)))
+      (status (response {:error "Invalid UUID format" :data {:location_id location_id :image_id image_id}}) 400))))
+
+(defn delete-item-image [item-id image-id]
+  (if (and (valid-uuid? item-id) (valid-uuid? image-id))
+    (if (db-get-item item-id)
+      (if (db-get-image image-id)
+        (do
+          (db-delete-item-image item-id image-id)
+          (response {:status "success"}))
+        (status (response {:error "Image not found"}) 404))
+      (status (response {:error "Item not found"}) 404))
+    (status (response {:error "Invalid UUID format" :data {:item_id item-id :image_id image-id}}) 400)))
+
+(defn delete-location-image [location-id image-id]
+  (if (and (valid-uuid? location-id) (valid-uuid? image-id))
+    (if (db-get-location location-id)
+      (if (db-get-image image-id)
+        (do
+          (db-delete-location-image location-id image-id)
+          (response {:status "success"}))
+        (status (response {:error "Image not found"}) 404))
+      (status (response {:error "Location not found"}) 404))
+    (status (response {:error "Invalid UUID format" :data {:location_id location-id :image_id image-id}}) 400)))
 
 (defn add-image [request]
   (let [image (keywordize-keys (:body request))]
@@ -341,25 +435,36 @@
       (try
         (let [new-image (prepare-image image)]
           (db-add-image new-image)
-          ;; Start background processing
-          (thread
-            (try
-              (println "Trying to invoke db-update-image")
-              (db-update-image (:id new-image) {:status "processing"})
-              (let [result (gemini/call-gemini-api (:image_data new-image) :latest "Image analysis")]
-                (db-update-image (:id new-image)
-                                 {:status "completed"
-                                  :gemini_result (json/generate-string result)}))
-              (catch Exception e
-                (println "Error processing image ID:" (:id new-image) "Error:" (.getMessage e))
-                (db-update-image (:id new-image)
-                                 {:status "failed"
-                                  :error_message (.getMessage e)}))))
           (response new-image))
         (catch Exception e
           (println "Error adding image:" (.getMessage e))
           (status (response {:error "Database error" :message (.getMessage e)}) 400)))
       (status (response {:error "Invalid image format" :data image}) 400))))
+
+(defn analyze-image [request id]
+  (if (valid-uuid? id)
+    (if-let [image (db-get-image id)]
+      (let [config (keywordize-keys (:body request))]
+        (if (valid-analysis-config? config)
+          (try
+            (thread
+              (try
+                (db-update-image id {:status "processing"})
+                (let [model-version (or (:model_version config) :latest)
+                      analysis-type (or (:analysis_type config) "Image analysis")
+                      result (gemini/call-gemini-api (:image_data image) model-version analysis-type)]
+                  (db-update-image id
+                                   {:status "completed"
+                                    :gemini_result (json/generate-string result)}))
+                (catch Exception e
+                  (println "Error processing image ID:" id "Error:" (.getMessage e))
+                  (db-update-image id
+                                   {:status "failed"
+                                    :error_message (.getMessage e)}))))
+            (response {:status "analysis_started" :image_id id}))
+          (status (response {:error "Invalid analysis configuration" :data config}) 400)))
+      (status (response {:error "Image not found"}) 404))
+    (status (response {:error "Invalid UUID format" :id id}) 400)))
 
 (defn get-image [id]
   (if-let [image (db-get-image id)]
@@ -369,14 +474,11 @@
 (defn build-location-hierarchy []
   (try
     (let [locations (jdbc/execute! ds
-                                   ["SELECT id, label, name, type, description, contents_summary, parent_id, area, created_at, updated_at FROM locations"]
+                                   ["SELECT id, label, name, type, description, parent_id, area, created_at, updated_at FROM locations"]
                                    {:builder-fn rs/as-unqualified-lower-maps})
           sanitized-locations (map #(dissoc % :children) locations)
           loc-map (reduce (fn [acc loc] (assoc acc (:id loc) (assoc loc :children []))) {} sanitized-locations)]
-      ;;      (println "Fetched" (count locations) "locations")
-      ;;      (println "Root locations:" (count (filter #(nil? (:parent_id %)) locations)))
       (letfn [(build-node [loc-id visited]
-                ;;              (println "Building node for loc-id:" loc-id)
                 (if (contains? visited loc-id)
                   (do
                     (println "Circular reference detected at loc-id:" loc-id)
@@ -389,15 +491,13 @@
                       (let [children (filter #(= (:parent_id %) loc-id) (vals loc-map))
                             children-with-hierarchy (map #(build-node (:id %) (conj visited loc-id))
                                                          children)]
-                        ;;                        (println "Children type before vec:" (type children-with-hierarchy))
                         (let [result (assoc loc :children (vec (sort-by :name children-with-hierarchy)))]
-                          ;;                          (println "Children type after vec:" (type (:children result)))
                           result))))))]
         (->> (vals loc-map)
              (filter #(nil? (:parent_id %)))
              (map :id)
              (map #(build-node % #{}))
-             (map #(select-keys % [:id :label :name :type :description :contents_summary :parent_id :area :children]))
+             (map #(select-keys % [:id :label :name :type :description :parent_id :area :children]))
              (sort-by :name)
              vec)))
     (catch Exception e
@@ -405,18 +505,14 @@
       (throw (ex-info "Failed to build location hierarchy" {:error (.getMessage e)})))))
 
 (defn get-location-hierarchy [_request]
-  (try (let [hierarchy (build-location-hierarchy)]
-         (response hierarchy))
-       (catch Exception e (println "Error in get-location-hierarchy:" (.getMessage e))
-              (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
+  (try
+    (let [hierarchy (build-location-hierarchy)]
+      (response hierarchy))
+    (catch Exception e
+      (println "Error in get-location-hierarchy:" (.getMessage e))
+      (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
 
 (defn descend-hierarchy
-  "Recursively descends the location hierarchy to retrieve the node or subtree at the specified path.
-   Args:
-     hierarchy-or-node: The full hierarchy (vector of root nodes) or a single node map.
-     path: A sequence of indices (e.g., [0 0] to get the first child of the first child of the first root).
-   Returns:
-     The node or subtree at the path, or nil if the path is invalid."
   [hierarchy-or-node path]
   (letfn [(descend [node path]
             (println "Descending at path" path "node type" (type node) "children type" (type (:children node)))
@@ -482,7 +578,7 @@
   (POST "/api/locations" request (add-location request))
   (PATCH "/api/locations/:id" [id :as request] (update-location request id))
   (DELETE "/api/locations/:id" [id] (delete-location id))
-  (GET "/api/locations/hierarchy" request (get-location-hierarchy request))  
+  (GET "/api/locations/hierarchy" request (get-location-hierarchy request))
   (GET "/api/locations/:id" [id] (get-location-details id))
   (POST "/api/items" request (add-item request))
   (PATCH "/api/items/:id" [id :as request] (update-item request id))
@@ -494,6 +590,11 @@
   (GET "/api/location/:param" [param] (get-location-by-name-or-label param))
   (POST "/api/images" request (add-image request))
   (GET "/api/images/:id" [id] (get-image id))
+  (POST "/api/images/:id/analyze" [id :as request] (analyze-image request id))
+  (POST "/api/item-images" request (add-item-image request))
+  (DELETE "/api/item-images/:item_id/:image_id" [item-id image-id] (delete-item-image item-id image-id))
+  (POST "/api/location-images" request (add-location-image request))
+  (DELETE "/api/location-images/:location_id/:image_id" [location-id image-id] (delete-location-image location-id image-id))
   (ANY "*" request
        (println "Unmatched request:" (:uri request))
        (status (response {:error "Route not found" :uri (:uri request)}) 404)))
