@@ -8,7 +8,10 @@
             [ring.middleware.cors :refer [wrap-cors]]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [workshop-api.gemini-describe :as gemini] ; Import gemini-describe namespace
+            [clojure.core.async :refer [go thread]]
+            [cheshire.core :as json])
   (:import [java.sql Timestamp]
            [java.time Instant]))
 
@@ -65,6 +68,11 @@
        (or (nil? (:contents_summary loc)) (string? (:contents_summary loc)))
        (or (nil? (:parent_id loc)) (string? (:parent_id loc)))))
 
+(defn valid-image? [image]
+  (and (string? (:image_data image))
+       (string? (:mime_type image))
+       (or (nil? (:filename image)) (string? (:filename image)))))
+
 (defn prepare-location [loc]
   (let [now (current-timestamp)]
     (-> loc
@@ -77,6 +85,14 @@
     (-> item
         (assoc :id (generate-id))
         (assoc :quantity (or (:quantity item) 1))
+        (assoc :created_at now)
+        (assoc :updated_at now))))
+
+(defn prepare-image [image]
+  (let [now (current-timestamp)]
+    (-> image
+        (assoc :id (generate-id))
+        (assoc :status "pending")
         (assoc :created_at now)
         (assoc :updated_at now))))
 
@@ -93,6 +109,34 @@
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                       (:id item) (:name item) (:category item) (:supplier item) (:supplier_part_no item) (:supplier_item_url item) (:description item) (:notes item) (:quantity item) (:location_id item) (:acquisition_date item) (:created_at item) (:updated_at item)]
                      {:return-keys true}))
+
+(defn db-add-image [image]
+  (jdbc/execute-one! ds
+                     ["INSERT INTO images (id, image_data, mime_type, filename, status, created_at, updated_at)
+                       VALUES (?::uuid, ?, ?, ?, ?, ?, ?)"
+                      (:id image) (:image_data image) (:mime_type image) (:filename image) (:status image) (:created_at image) (:updated_at image)]
+                     {:return-keys true}))
+
+(defn db-update-image [id updates]
+  (let [now (current-timestamp)
+        updateable-fields (select-keys updates [:status :gemini_result :error_message])
+        updateable-fields (assoc updateable-fields :updated_at now)]
+    (if (empty? (dissoc updateable-fields :updated_at))
+      (do
+        (println "No fields to update for image ID:" id)
+        nil)
+      (let [sql (str "UPDATE images SET "
+                     (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
+                     " WHERE id = ?")
+            params (concat (vals updateable-fields) [id])]
+        (jdbc/execute-one! ds
+                           (into [sql] params)
+                           {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))))
+
+(defn db-get-image [id]
+  (jdbc/execute-one! ds
+                     ["SELECT * FROM images WHERE id = ?::uuid" id]
+                     {:builder-fn rs/as-unqualified-lower-maps}))
 
 (defn db-update-item [id item]
   (let [now (current-timestamp)
@@ -284,6 +328,36 @@
   (let [locations (db-get-all-locations)]
     (response locations)))
 
+(defn add-image [request]
+  (let [image (keywordize-keys (:body request))]
+    (if (valid-image? image)
+      (try
+        (let [new-image (prepare-image image)]
+          (db-add-image new-image)
+          ;; Start background processing
+          (thread
+            (try
+              (db-update-image (:id new-image) {:status "processing"})
+              (let [result (gemini/call-gemini-api (:image_data new-image) :latest "Image analysis")]
+                (db-update-image (:id new-image)
+                                 {:status "completed"
+                                  :gemini_result (json/generate-string result)}))
+              (catch Exception e
+                (println "Error processing image ID:" (:id new-image) "Error:" (.getMessage e))
+                (db-update-image (:id new-image)
+                                 {:status "failed"
+                                  :error_message (.getMessage e)}))))
+          (response new-image))
+        (catch Exception e
+          (println "Error adding image:" (.getMessage e))
+          (status (response {:error "Database error" :message (.getMessage e)}) 400)))
+      (status (response {:error "Invalid image format" :data image}) 400))))
+
+(defn get-image [id]
+  (if-let [image (db-get-image id)]
+    (response image)
+    (status (response {:error "Image not found"}) 404)))
+
 (defn build-location-hierarchy []
   (try
     (let [locations (jdbc/execute! ds
@@ -291,10 +365,10 @@
                                    {:builder-fn rs/as-unqualified-lower-maps})
           sanitized-locations (map #(dissoc % :children) locations)
           loc-map (reduce (fn [acc loc] (assoc acc (:id loc) (assoc loc :children []))) {} sanitized-locations)]
-;;      (println "Fetched" (count locations) "locations")
-;;      (println "Root locations:" (count (filter #(nil? (:parent_id %)) locations)))
+      ;;      (println "Fetched" (count locations) "locations")
+      ;;      (println "Root locations:" (count (filter #(nil? (:parent_id %)) locations)))
       (letfn [(build-node [loc-id visited]
-  ;;              (println "Building node for loc-id:" loc-id)
+                ;;              (println "Building node for loc-id:" loc-id)
                 (if (contains? visited loc-id)
                   (do
                     (println "Circular reference detected at loc-id:" loc-id)
@@ -307,9 +381,9 @@
                       (let [children (filter #(= (:parent_id %) loc-id) (vals loc-map))
                             children-with-hierarchy (map #(build-node (:id %) (conj visited loc-id))
                                                          children)]
-;;                        (println "Children type before vec:" (type children-with-hierarchy))
+                        ;;                        (println "Children type before vec:" (type children-with-hierarchy))
                         (let [result (assoc loc :children (vec (sort-by :name children-with-hierarchy)))]
-;;                          (println "Children type after vec:" (type (:children result)))
+                          ;;                          (println "Children type after vec:" (type (:children result)))
                           result))))))]
         (->> (vals loc-map)
              (filter #(nil? (:parent_id %)))
@@ -410,6 +484,8 @@
   (GET "/api/items" request (get-all-items request))
   (GET "/api/locations" request (get-all-locations request))
   (GET "/api/location/:param" [param] (get-location-by-name-or-label param))
+  (POST "/api/images" request (add-image request))
+  (GET "/api/images/:id" [id] (get-image id))
   (ANY "*" request
        (println "Unmatched request:" (:uri request))
        (status (response {:error "Route not found" :uri (:uri request)}) 404)))

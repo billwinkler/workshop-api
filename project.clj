@@ -13,7 +13,10 @@
                  [ring/ring-defaults "0.4.0"]
                  [clj-time "0.15.2"]
                  [com.github.seancorfield/next.jdbc "1.3.925"] ;; Database access
-                 [org.postgresql/postgresql "42.7.3"]]         ;; PostgreSQL driver
+                 [org.postgresql/postgresql "42.7.3"]
+                 [cheshire "5.12.0"]
+                 [org.clojure/core.async "1.6.681"]
+                 [clj-http "3.12.0"]]
   :main ^:skip-aot workshop-api.core
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all
