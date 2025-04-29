@@ -216,6 +216,10 @@
                        WHERE i.id = ?::uuid" id]
                      {:builder-fn rs/as-unqualified-lower-maps}))
 
+(defn get-all-items [_request]
+  (let [items (db-get-all-items)]
+    (response items)))
+
 (defn db-check-location-items [id]
   (jdbc/execute-one! ds
                      ["SELECT COUNT(*) AS count FROM items WHERE location_id = ?::uuid" id]
@@ -369,6 +373,10 @@
           images (db-get-location-images id)]
       (response {:location loc :items items :images images}))
     (status (response {:error "Location not found"}) 404)))
+
+(defn get-all-locations [_request]
+  (let [locations (db-get-all-locations)]
+    (response locations)))
 
 (defn get-item [id]
   (try
