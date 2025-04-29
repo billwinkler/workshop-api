@@ -11,7 +11,8 @@
             [clojure.string :as str]
             [workshop-api.gemini-describe :as gemini] ; Import gemini-describe namespace
             [clojure.core.async :refer [go thread]]
-            [cheshire.core :as json])
+            [cheshire.core :as json]
+            [clojure.edn :as edn])
   (:import [java.sql Timestamp]
            [java.time Instant]))
 
@@ -126,8 +127,11 @@
         (println "No fields to update for image ID:" id)
         nil)
       (let [sql (str "UPDATE images SET "
-                     (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
-                     " WHERE id = ?")
+                     (str/join ", " (map #(if (= % :gemini_result)
+                                            "gemini_result = ?::jsonb"
+                                            (str (name %) " = ?"))
+                                         (keys updateable-fields)))
+                     " WHERE id = ?::uuid")
             params (concat (vals updateable-fields) [id])]
         (jdbc/execute-one! ds
                            (into [sql] params)
@@ -337,6 +341,7 @@
           ;; Start background processing
           (thread
             (try
+              (println "Trying to invoke db-update-image")
               (db-update-image (:id new-image) {:status "processing"})
               (let [result (gemini/call-gemini-api (:image_data new-image) :latest "Image analysis")]
                 (db-update-image (:id new-image)

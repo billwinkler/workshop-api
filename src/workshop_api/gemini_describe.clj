@@ -55,36 +55,44 @@
         url (str model-base-url model ":generateContent?key=" api-key)
         body (make-request-body base64-image config)
         temp-file "/tmp/gemini_request.json"]
+    (println "Preparing Gemini API call with model:" model "Config:" config "Notes:" notes)
+    (println "Request body size:" (count body) "bytes")
     (try
       (spit temp-file body)
+      (println "Wrote request body to" temp-file)
       (let [max-retries 3
             retry-delay 10]
         (loop [attempt 1]
+          (println "Attempting Gemini API call, attempt" attempt "of" max-retries)
           (let [response
                 (try 
                   (http/post url
-                            {:body body
-                             :headers {"Content-Type" "application/json"}
-                             :as :json})
-                   (catch Exception e  ; <-- Correct use of catch
-                     (if (and (= (:status (ex-data e)) 429) (< attempt max-retries))
-                       (let [retry-after (or (some-> (get-in (ex-data e) [:headers :retry-after])
-                                                   (Integer/parseInt))
-                                           retry-delay)]
+                             {:body body
+                              :headers {"Content-Type" "application/json"}
+                              :as :json})
+                  (catch Exception e    ; <-- Correct use of catch
+                    (println "API call failed:" (.getMessage e) "Status:" (:status (ex-data e)))
+                    (if (and (= (:status (ex-data e)) 429) (< attempt max-retries))
+                      (let [retry-after (or (some-> (get-in (ex-data e) [:headers :retry-after])
+                                                    (Integer/parseInt))
+                                            retry-delay)]
                         (println (str "Rate limit hit (attempt " attempt "/" max-retries "). Waiting " retry-after " seconds..."))
                         (Thread/sleep (* retry-after 1000))
-                        ::retry)  ; Use a signal value for retry
+                        ::retry)        ; Use a signal value for retry
                       (do
-                        (println "API Error:" (.getMessage e))
-                        (throw e)))))] ; Re-throw original exception
+                        (println "Non-retryable error:" (.getMessage e))
+                        (throw e)))))]  ; Re-throw original exception
             (if (= response ::retry)
-                (recur (inc attempt))
-                (assoc (:body response) :notes notes)))))
-      (catch Exception e 
-        (println "Error in main try block:" (.getMessage e))
+              (recur (inc attempt))
+              (do
+                (println "API call successful, response received")
+                (assoc (:body response) :notes notes))))))
+      (catch Exception e
+        (println "Error in Gemini API call:" (.getMessage e) "Stacktrace:" (seq (.getStackTrace e)))
         (throw e))
       (finally
-        (io/delete-file temp-file :silent)))))
+;;        (io/delete-file temp-file :silent)
+        ))))
   
   (defn finish-reason [api-response]
     (get-in api-response [:candidates 0 :finishReason]))
