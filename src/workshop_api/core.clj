@@ -138,9 +138,12 @@
                            {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))))
 
 (defn db-get-image [id]
-  (jdbc/execute-one! ds
-                     ["SELECT * FROM images WHERE id = ?::uuid" id]
-                     {:builder-fn rs/as-unqualified-lower-maps}))
+  (let [image (jdbc/execute-one! ds
+                                 ["SELECT * FROM images WHERE id = ?::uuid" id]
+                                 {:builder-fn rs/as-unqualified-lower-maps})]
+    (if image
+      (update image :gemini_result #(when % (json/parse-string (.getValue %) true)))
+      image)))
 
 (defn db-update-item [id item]
   (let [now (current-timestamp)
