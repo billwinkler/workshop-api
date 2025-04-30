@@ -367,23 +367,25 @@
     (status (response {:error "Location not found"}) 404)))
 
 (defn add-item [request]
+  (println "add-item raw request:" (dissoc request :body))
+  (println "add-item received body:" (:body request))
   (let [item (keywordize-keys (:body request))]
-    (println "add-item received body:" (:body request))
     (println "add-item keywordized:" item)
-    (if (valid-item? item)
-      (try
-        (let [new-item (prepare-item item)]
-          (if (db-get-location (:location_id new-item))
-            (do
-              (db-add-item new-item)
-              (response new-item))
-            (status (response {:error "Location not found"}) 400)))
-        (catch Exception e
-          (if (str/includes? (.getMessage e) "foreign key constraint")
-            (status (response {:error "Database error" :message "Invalid location_id"}) 400)
-            (status (response {:error "Database error" :message (.getMessage e)}) 400))))
-      (status (response {:error "Invalid item format" :data item}) 400))))
-
+    (if (map? (:body request))
+      (if (valid-item? item)
+        (try
+          (let [new-item (prepare-item item)]
+            (if (db-get-location (:location_id new-item))
+              (do
+                (db-add-item new-item)
+                (response new-item))
+              (status (response {:error "Database error" :message "Invalid location_id"}) 400)))
+          (catch Exception e
+            (status (response {:error "Database error" :message (.getMessage e)}) 400)))
+        (status (response {:error "Invalid item format" :data item}) 400))
+      (do
+        (println "add-item error: body is not a map, received:" (:body request))
+        (status (response {:error "Invalid request body" :data (:body request)}) 400)))))
 
 (defn get-all-items [_request]
   (let [items (db-get-all-items)]
@@ -697,10 +699,10 @@
 
 (def app
   (-> (routes test-routes app-routes)
-      (wrap-log-json-body)
+;;      (wrap-log-json-body)
       (wrap-json-body {:keywords? true :malformed-response {:status 400 :body "Invalid JSON"}})
       wrap-params
-      wrap-debug
+  ;;    wrap-debug
       wrap-json-response
       (wrap-cors :access-control-allow-origin [#".*"]
                  :access-control-allow-methods [:get :post :patch :delete])))
