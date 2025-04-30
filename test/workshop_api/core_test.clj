@@ -7,13 +7,13 @@
             [next.jdbc.sql :as sql]
             [next.jdbc.result-set :as rs]
             [cheshire.core :as json]
-            [workshop-api.core :refer [app ds generate-id current-timestamp db-add-location db-get-image]]
+            [workshop-api.core :refer [app ds generate-id current-timestamp db-add-location db-get-image db-add-item db-add-image]]
             [clojure.string :as str]))
 
 ;; Mock gemini/call-gemini-api to avoid external calls
 (defn mock-gemini-api [image-data model-version analysis-type]
   (let [model-str (if (keyword? model-version)
-                    (name model-version) ; Converts :latest to "latest"
+                    (name model-version)
                     (str model-version))]
     {:mock_result (str "Analyzed " image-data " with " model-str " and " analysis-type)}))
 
@@ -32,8 +32,6 @@
 (defn db-fixture [f]
   (try
     (jdbc/execute-one! ds ["SELECT 1"])
-;;    (println "Test database connection successful")
-;;    (verify-schema ds)
     (catch Exception e
       (println "Test database setup failed:" (.getMessage e))
       (throw e)))
@@ -41,16 +39,49 @@
     (f))
   (try
     (jdbc/execute! ds ["TRUNCATE TABLE item_images, location_images, items, images, locations RESTART IDENTITY"])
-;;    (println "Truncated tables successfully")
     (catch Exception e
       (println "Failed to truncate tables:" (.getMessage e)))))
 
 (use-fixtures :each db-fixture)
 
-;; a helper function for next.jdbc to coerce unqualified keys  
+;; Helper function to check if a string is a valid UUID
+(defn valid-uuid? [s]
+  (try
+    (java.util.UUID/fromString s)
+    true
+    (catch IllegalArgumentException _
+      false)))
+
+;; Helper function for next.jdbc to coerce unqualified keys
 (defn find-by-keys-unqualified
   [ds table criteria]
   (sql/find-by-keys ds table criteria {:builder-fn rs/as-unqualified-lower-maps}))
+
+;; Custom query for item_images to handle UUID casting
+(defn find-item-images
+  [ds criteria]
+  (let [{:keys [item_id image_id]} criteria]
+    (cond
+      (and item_id image_id)
+      (if (and (valid-uuid? item_id) (valid-uuid? image_id))
+        (jdbc/execute! ds
+                       ["SELECT * FROM item_images WHERE item_id = ?::uuid AND image_id = ?::uuid" item_id image_id]
+                       {:builder-fn rs/as-unqualified-lower-maps})
+        [])
+      item_id
+      (if (valid-uuid? item_id)
+        (jdbc/execute! ds
+                       ["SELECT * FROM item_images WHERE item_id = ?::uuid" item_id]
+                       {:builder-fn rs/as-unqualified-lower-maps})
+        [])
+      image_id
+      (if (valid-uuid? image_id)
+        (jdbc/execute! ds
+                       ["SELECT * FROM item_images WHERE image_id = ?::uuid" image_id]
+                       {:builder-fn rs/as-unqualified-lower-maps})
+        [])
+      :else
+      (throw (ex-info "At least one of item_id or image_id must be provided" {})))))
 
 (deftest test-add-location
   (testing "Adding a valid location"
@@ -79,9 +110,7 @@
                     :description "Storage for tools"
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
-          _ (do
-;;              (println "Inserting location:" location)
-              (db-add-location location))
+          _ (db-add-location location)
           item {:name "Screwdriver"
                 :description "Phillips head screwdriver"
                 :location_id location-id
@@ -90,7 +119,6 @@
           request (-> (mock/request :post "/api/items")
                       (mock/json-body item))
           response (app request)]
-;;      (println "Item response:" (:body response))
       (let [response-body (try (json/parse-string (:body response) true)
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
@@ -146,7 +174,6 @@
           request (-> (mock/request :post "/api/images")
                       (mock/json-body image))
           response (app request)]
-;;      (println "Image response:" (:body response))  ;; Debug output
       (let [response-body (try (json/parse-string (:body response) true)
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
@@ -162,11 +189,10 @@
         (is (= "test.jpg" (:filename (first db-image))) "Expected correct filename in database")
         (is (= "pending" (:status (first db-image))) "Expected pending status in database"))))
   (testing "Adding an invalid image (missing required fields)"
-    (let [image {:filename "invalid.jpg"}  ;; Missing image_data, mime_type
+    (let [image {:filename "invalid.jpg"}
           request (-> (mock/request :post "/api/images")
                       (mock/json-body image))
           response (app request)]
-;;      (println "Invalid image response:" (:body response))  ;; Debug output
       (let [response-body (try (json/parse-string (:body response) true)
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
@@ -175,6 +201,119 @@
         (is (= "Invalid image format" (:error response-body)) "Expected error message")
         (is (empty? (find-by-keys-unqualified ds :images {:filename "invalid.jpg"}))
             "Expected no image in database")))))
+
+(deftest test-add-item-image
+  (testing "Adding a valid item-image link"
+    (let [location-id (generate-id)
+          location {:id location-id
+                    :label "L1"
+                    :name "Tool Shed"
+                    :type "Shed"
+                    :area "Backyard"
+                    :description "Storage for tools"
+                    :created_at (current-timestamp)
+                    :updated_at (current-timestamp)}
+          _ (db-add-location location)
+          item-id (generate-id)
+          item {:id item-id
+                :name "Screwdriver"
+                :description "Phillips head screwdriver"
+                :location_id location-id
+                :category "Tool"
+                :quantity 5
+                :created_at (current-timestamp)
+                :updated_at (current-timestamp)}
+          _ (db-add-item item)
+          image-id (generate-id)
+          image {:id image-id
+                 :image_data "base64-encoded-data"
+                 :mime_type "image/jpeg"
+                 :filename "test.jpg"
+                 :status "pending"
+                 :created_at (current-timestamp)
+                 :updated_at (current-timestamp)}
+          _ (db-add-image image)
+          item-image {:item_id item-id :image_id image-id}
+          request (-> (mock/request :post "/api/item-images")
+                      (mock/json-body item-image))
+          response (app request)]
+      (let [response-body (try (json/parse-string (:body response) true)
+                              (catch Exception e
+                                (println "Failed to parse response:" (.getMessage e))
+                                {}))
+            db-item-image (find-item-images ds {:item_id item-id :image_id image-id})]
+        (is (= 200 (:status response)) "Expected 200 status")
+        (is (= "success" (:status response-body)) "Expected success status in response")
+        (is (= item-id (:item_id response-body)) "Expected correct item_id in response")
+        (is (= image-id (:image_id response-body)) "Expected correct image_id in response")
+        (is (= 1 (count db-item-image)) "Expected one item-image link in database")
+        (is (= item-id (str (:item_id (first db-item-image)))) "Expected correct item_id in database")
+        (is (= image-id (str (:image_id (first db-item-image)))) "Expected correct image_id in database"))))
+  (testing "Adding item-image link with invalid UUIDs"
+    (let [item-image {:item_id "invalid-uuid" :image_id "invalid-uuid"}
+          request (-> (mock/request :post "/api/item-images")
+                      (mock/json-body item-image))
+          response (app request)]
+      (let [response-body (try (json/parse-string (:body response) true)
+                              (catch Exception e
+                                (println "Failed to parse response:" (.getMessage e))
+                                {}))]
+        (is (= 400 (:status response)) "Expected 400 status")
+        (is (= "Invalid UUID format" (:error response-body)) "Expected error message")
+        (is (empty? (find-item-images ds {:item_id "invalid-uuid"})) "Expected no item-image link in database"))))
+  (testing "Adding item-image link with non-existent item"
+    (let [image-id (generate-id)
+          image {:id image-id
+                 :image_data "base64-encoded-data"
+                 :mime_type "image/jpeg"
+                 :filename "test.jpg"
+                 :status "pending"
+                 :created_at (current-timestamp)
+                 :updated_at (current-timestamp)}
+          _ (db-add-image image)
+          item-image {:item_id "00000000-0000-0000-0000-000000000000" :image_id image-id}
+          request (-> (mock/request :post "/api/item-images")
+                      (mock/json-body item-image))
+          response (app request)]
+      (let [response-body (try (json/parse-string (:body response) true)
+                              (catch Exception e
+                                (println "Failed to parse response:" (.getMessage e))
+                                {}))]
+        (is (= 404 (:status response)) "Expected 404 status")
+        (is (= "Item or image not found" (:error response-body)) "Expected error message")
+        (is (empty? (find-item-images ds {:item_id "00000000-0000-0000-0000-000000000000"})) "Expected no item-image link in database"))))
+  (testing "Adding item-image link with non-existent image"
+    (let [location-id (generate-id)
+          location {:id location-id
+                    :label "L1"
+                    :name "Tool Shed"
+                    :type "Shed"
+                    :area "Backyard"
+                    :description "Storage for tools"
+                    :created_at (current-timestamp)
+                    :updated_at (current-timestamp)}
+          _ (db-add-location location)
+          item-id (generate-id)
+          item {:id item-id
+                :name "Screwdriver"
+                :description "Phillips head screwdriver"
+                :location_id location-id
+                :category "Tool"
+                :quantity 5
+                :created_at (current-timestamp)
+                :updated_at (current-timestamp)}
+          _ (db-add-item item)
+          item-image {:item_id item-id :image_id "00000000-0000-0000-0000-000000000000"}
+          request (-> (mock/request :post "/api/item-images")
+                      (mock/json-body item-image))
+          response (app request)]
+      (let [response-body (try (json/parse-string (:body response) true)
+                              (catch Exception e
+                                (println "Failed to parse response:" (.getMessage e))
+                                {}))]
+        (is (= 404 (:status response)) "Expected 404 status")
+        (is (= "Item or image not found" (:error response-body)) "Expected error message")
+        (is (empty? (find-item-images ds {:item_id item-id})) "Expected no item-image link in database")))))
 
 (defn wait-for-image-status [ds image-id expected-status timeout-ms]
   (let [start-time (System/currentTimeMillis)]
@@ -206,9 +345,7 @@
           body-str (slurp (:body request))
           request (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
           response (wrapped-handler request)
-          response-body (:body response)] ; No json/parse-string since no wrap-json-response
-;;      (println "Raw JSON body:" body-str)
-;;      (println "Response body:" response-body)
+          response-body (:body response)]
       (is (= 200 (:status response)) "Expected 200 status")
       (is (map? (:received-body response-body)) "Expected parsed JSON body to be a map")
       (is (= {:model_version "latest" :analysis_type "Image analysis"} (:received-body response-body))
@@ -225,35 +362,21 @@
                                                  VALUES (?::uuid, ?, ?, ?, ?, ?)"
                                                  image-id "data" "image/jpeg" "pending" (current-timestamp) (current-timestamp)]
                                                 {:builder-fn rs/as-unqualified-lower-maps :return-keys true})
-;;               _ (println "Insert result:" insert-result)
                image-from-db (db-get-image image-id tx)
-;;               _ (println "Image from DB before request:" image-from-db)
                request (-> (mock/request :post (str "/api/images/" image-id "/analyze"))
                            (mock/json-body {:model_version "latest" :analysis_type "Image analysis"}))
                body-str (slurp (:body request))
                request (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
-;;               _ (println "Raw JSON body:" body-str)
-               ;; _ (println "Parsed body map:" (try
-               ;;                                 (json/parse-string body-str true)
-               ;;                                 (catch Exception e
-               ;;                                   (println "JSON parse error:" (.getMessage e))
-               ;;                                   nil)))
                response (app (assoc request :next.jdbc/connection tx))
                response-body (json/parse-string (:body response) true)]
-;;           (println "Response status:" (:status response))
-;;           (println "Response body:" response-body)
            (is (= 200 (:status response)) "Expected 200 status")
            (is (= "analysis_started" (:status response-body)) "Expected analysis started status")
            (let [db-image (wait-for-image-status tx image-id "completed" 5000)
                  gemini-result (if (instance? org.postgresql.util.PGobject (:gemini_result db-image))
                                  (json/parse-string (.getValue (:gemini_result db-image)) true)
                                  (:gemini_result db-image))]
-;;             (println "Retrieved image from DB:" db-image)
              (println "Processed gemini_result:" gemini-result)
              (is (= "completed" (:status db-image)) "Expected completed status")
              (is (map? gemini-result) "Expected gemini_result to be a map")
              (is (= {:mock_result "Analyzed data with latest and Image analysis"} gemini-result)
                  "Expected correct Gemini result"))))))))
-
-
-
