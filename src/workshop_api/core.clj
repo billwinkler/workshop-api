@@ -85,8 +85,15 @@
     (catch IllegalArgumentException _ false)))
 
 (defn valid-analysis-config? [config]
-  (and (or (nil? (:model_version config)) (keyword? (:model_version config)))
-       (or (nil? (:analysis_type config)) (string? (:analysis_type config)))))
+  (let [model-version (if (string? (:model_version config))
+                        (keyword (:model_version config))
+                        (:model_version config))]
+    (println "Validating config:" config)
+    (println "Processed model_version:" model-version)
+    (println "model_version valid?" (or (nil? model-version) (keyword? model-version)))
+    (println "analysis_type valid?" (or (nil? (:analysis_type config)) (string? (:analysis_type config))))
+    (and (or (nil? model-version) (keyword? model-version))
+         (or (nil? (:analysis_type config)) (string? (:analysis_type config))))))
 
 (defn prepare-location [loc]
   (let [now (current-timestamp)]
@@ -138,8 +145,10 @@
                       (:id image) (:image_data image) (:mime_type image) (:filename image) (:status image) (:created_at image) (:updated_at image)]
                      {:return-keys true}))
 
-(defn db-update-image [id updates]
-  (let [now (current-timestamp)
+;; added optional conn to support testing
+(defn db-update-image [id updates & [conn]]
+  (let [ds (or conn ds)
+        now (current-timestamp)
         updateable-fields (select-keys updates [:status :gemini_result :error_message])
         updateable-fields (assoc updateable-fields :updated_at now)]
     (if (empty? (dissoc updateable-fields :updated_at))
@@ -156,14 +165,22 @@
         (jdbc/execute-one! ds
                            (into [sql] params)
                            {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))))
-
-(defn db-get-image [id]
-  (let [image (jdbc/execute-one! ds
-                                 ["SELECT * FROM images WHERE id = ?::uuid" id]
-                                 {:builder-fn rs/as-unqualified-lower-maps})]
-    (if image
-      (update image :gemini_result #(when % (json/parse-string (.getValue %) true)))
-      image)))
+;; added optional conn to support testing
+(defn db-get-image [id & [conn]]
+  (let [ds (or conn ds)]
+    (let [image (jdbc/execute-one! ds
+                                   ["SELECT * FROM images WHERE id = ?::uuid" id]
+                                   {:builder-fn rs/as-unqualified-lower-maps})]
+      (println "db-get-image query for ID:" id "result:" image)
+      (if image
+        (update image :gemini_result
+                #(when % 
+                   (try
+                     (json/parse-string (.getValue %) true)
+                     (catch Exception e
+                       (println "Error parsing gemini_result:" (.getMessage e))
+                       %))))
+        image))))
 
 (defn db-update-item [id item]
   (let [now (current-timestamp)
@@ -462,29 +479,47 @@
       (status (response {:error "Invalid image format" :data image}) 400))))
 
 (defn analyze-image [request id]
-  (if (valid-uuid? id)
-    (if-let [image (db-get-image id)]
-      (let [config (keywordize-keys (:body request))]
-        (if (valid-analysis-config? config)
-          (try
-            (thread
-              (try
-                (db-update-image id {:status "processing"})
-                (let [model-version (or (:model_version config) :latest)
-                      analysis-type (or (:analysis_type config) "Image analysis")
-                      result (gemini/call-gemini-api (:image_data image) model-version analysis-type)]
-                  (db-update-image id
-                                   {:status "completed"
-                                    :gemini_result (json/generate-string result)}))
-                (catch Exception e
-                  (println "Error processing image ID:" id "Error:" (.getMessage e))
-                  (db-update-image id
-                                   {:status "failed"
-                                    :error_message (.getMessage e)}))))
-            (response {:status "analysis_started" :image_id id}))
-          (status (response {:error "Invalid analysis configuration" :data config}) 400)))
-      (status (response {:error "Image not found"}) 404))
-    (status (response {:error "Invalid UUID format" :id id}) 400)))
+  (println "Analyzing image with ID:" id)
+  (println "Raw request body:" (:body request))
+  (let [conn (or (:next.jdbc/connection request) ds)]
+    (println "Using database:" conn)
+    (let [images (jdbc/execute! conn
+                                ["SELECT * FROM images"]
+                                {:builder-fn rs/as-unqualified-lower-maps})]
+      (println "query results:" images))
+    (if (valid-uuid? id)
+      (if-let [image (db-get-image id conn)]
+        (let [config (keywordize-keys (:body request))]
+          (println "Processed config:" config)
+          (if (valid-analysis-config? config)
+            (try
+              (println "Starting analysis thread for image:" image)
+              (thread
+                (try
+                  (db-update-image id {:status "processing"} conn)
+                  (let [model-version (or (:model_version config) :latest)
+                        analysis-type (or (:analysis_type config) "Image analysis")
+                        result (gemini/call-gemini-api (:image_data image) model-version analysis-type)]
+                    (db-update-image id
+                                     {:status "completed"
+                                      :gemini_result (json/generate-string result)}
+                                     conn))
+                  (catch Exception e
+                    (println "Error processing image ID:" id "Error:" (.getMessage e))
+                    (db-update-image id
+                                     {:status "failed"
+                                      :error_message (.getMessage e)}
+                                     conn))))
+              (response {:status "analysis_started" :image_id id}))
+            (do
+              (println "Invalid analysis config:" config)
+              (status (response {:error "Invalid analysis configuration" :data config}) 400))))
+        (do
+          (println "Image not found for ID:" id)
+          (status (response {:error "Image not found"}) 404)))
+      (do
+        (println "Invalid UUID format:" id)
+        (status (response {:error "Invalid UUID format" :id id}) 400)))))
 
 (defn get-image [id]
   (if-let [image (db-get-image id)]
@@ -594,6 +629,10 @@
                 (db-search-items query))]
     (response items)))
 
+(defroutes test-routes
+  (POST "/test" request
+    (response {:received-body (:body request)})))
+
 (defroutes app-routes
   (POST "/api/locations" request (add-location request))
   (PATCH "/api/locations/:id" [id :as request] (update-location request id))
@@ -616,13 +655,53 @@
   (POST "/api/location-images" request (add-location-image request))
   (DELETE "/api/location-images/:location_id/:image_id" [location-id image-id] (delete-location-image location-id image-id))
   (ANY "*" request
-       (println "Unmatched request:" (:uri request))
-       (status (response {:error "Route not found" :uri (:uri request)}) 404)))
+    (println "Unmatched request:" (:uri request))
+    (status (response {:error "Route not found" :uri (:uri request)}) 404)))
+
+(defn wrap-debug-json-body [handler]
+  (fn [request]
+    (println "wrap-json-body processing request:" (dissoc request :body))
+    (println "wrap-json-body raw body:" (if (:body request)
+                                          (try
+                                            (slurp (:body request))
+                                            (catch Exception e
+                                              (println "Error reading body:" (.getMessage e))
+                                              ""))
+                                          "No body"))
+    (let [response (handler request)]
+      (println "wrap-json-body parsed body:" (:body request))
+      response)))
+
+(defn wrap-debug-request [handler]
+  (fn [request]
+    (let [body-str (if (:body request)
+                     (try
+                       (slurp (:body request))
+                       (catch Exception e
+                         (println "Error reading body:" (.getMessage e))
+                         ""))
+                     "No body")
+          parsed-body (if (and body-str (not-empty body-str))
+                        (try
+                          (json/parse-string body-str true)
+                          (catch Exception e
+                            (println "JSON parse error:" (.getMessage e))
+                            nil))
+                        nil)
+          new-request (if body-str
+                        (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
+                        request)]
+      (println "Incoming request:" (dissoc new-request :body))
+      (println "Raw body:" body-str)
+      (println "Parsed body:" parsed-body)
+      (handler new-request))))
 
 (def app
-  (-> app-routes
+  (-> (routes test-routes app-routes)
+      (wrap-json-body {:keywords? true :malformed-response {:status 400 :body "Invalid JSON"}})
       wrap-params
-      (wrap-json-body {:keywords? true})
+      wrap-debug-json-body
+      wrap-debug-request
       wrap-json-response
       (wrap-cors :access-control-allow-origin [#".*"]
                  :access-control-allow-methods [:get :post :patch :delete])))

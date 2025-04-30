@@ -1,16 +1,21 @@
 (ns workshop-api.core-test
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [ring.mock.request :as mock]
+            [ring.util.response :refer [response status]]
+            [ring.middleware.json :refer [wrap-json-body]]
             [next.jdbc :as jdbc]
             [next.jdbc.sql :as sql]
             [next.jdbc.result-set :as rs]
             [cheshire.core :as json]
-            [workshop-api.core :refer [app ds generate-id current-timestamp db-add-location]]
+            [workshop-api.core :refer [app ds generate-id current-timestamp db-add-location db-get-image]]
             [clojure.string :as str]))
 
 ;; Mock gemini/call-gemini-api to avoid external calls
 (defn mock-gemini-api [image-data model-version analysis-type]
-  {:mock_result (str "Analyzed " image-data " with " model-version " and " analysis-type)})
+  (let [model-str (if (keyword? model-version)
+                    (name model-version) ; Converts :latest to "latest"
+                    (str model-version))]
+    {:mock_result (str "Analyzed " image-data " with " model-str " and " analysis-type)}))
 
 ;; Verify database schema
 (defn verify-schema [ds]
@@ -170,3 +175,73 @@
         (is (= "Invalid image format" (:error response-body)) "Expected error message")
         (is (empty? (find-by-keys-unqualified ds :images {:filename "invalid.jpg"}))
             "Expected no image in database")))))
+
+(defn wait-for-image-status [ds image-id expected-status timeout-ms]
+  (let [start-time (System/currentTimeMillis)]
+    (loop []
+      (let [db-image (jdbc/execute-one! ds
+                                        ["SELECT * FROM images WHERE id = ?::uuid" image-id]
+                                        {:builder-fn rs/as-unqualified-lower-maps})]
+        (cond
+          (= (:status db-image) expected-status) db-image
+          (> (- (System/currentTimeMillis) start-time) timeout-ms) (throw (ex-info "Timeout waiting for image status" {:image-id image-id :expected-status expected-status}))
+          :else (do (Thread/sleep 100) (recur)))))))
+
+(deftest test-json-body-middleware
+  (testing "JSON body parsing"
+    (let [request (-> (mock/request :post "/test")
+                      (mock/json-body {:model_version "latest" :analysis_type "Image analysis"}))
+          body-str (slurp (:body request))
+          request (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
+          response (app request)
+          response-body (json/parse-string (:body response) true)]
+      (println "Raw JSON body:" body-str)
+      (println "Response body:" response-body)
+      (is (= 200 (:status response)) "Expected 200 status")
+      (is (map? (:received-body response-body)) "Expected parsed JSON body to be a map")
+      (is (= {:model_version "latest" :analysis_type "Image analysis"} (:received-body response-body))
+          "Expected parsed JSON body"))))
+
+(deftest test-analyze-image
+  (testing "Analyzing an image"
+    (db-fixture
+     (fn []
+       (jdbc/with-transaction [tx ds]
+         (let [image-id (generate-id)
+               insert-result (jdbc/execute-one! tx
+                                                ["INSERT INTO images (id, image_data, mime_type, status, created_at, updated_at)
+                                                 VALUES (?::uuid, ?, ?, ?, ?, ?)"
+                                                 image-id "data" "image/jpeg" "pending" (current-timestamp) (current-timestamp)]
+                                                {:builder-fn rs/as-unqualified-lower-maps :return-keys true})
+               _ (println "Insert result:" insert-result)
+               image-from-db (db-get-image image-id tx)
+               _ (println "Image from DB before request:" image-from-db)
+               request (-> (mock/request :post (str "/api/images/" image-id "/analyze"))
+                           (mock/json-body {:model_version "latest" :analysis_type "Image analysis"}))
+               body-str (slurp (:body request))
+               request (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
+               _ (println "Raw JSON body:" body-str)
+               _ (println "Parsed body map:" (try
+                                               (json/parse-string body-str true)
+                                               (catch Exception e
+                                                 (println "JSON parse error:" (.getMessage e))
+                                                 nil)))
+               response (app (assoc request :next.jdbc/connection tx))
+               response-body (json/parse-string (:body response) true)]
+           (println "Response status:" (:status response))
+           (println "Response body:" response-body)
+           (is (= 200 (:status response)) "Expected 200 status")
+           (is (= "analysis_started" (:status response-body)) "Expected analysis started status")
+           (let [db-image (wait-for-image-status tx image-id "completed" 5000)
+                 gemini-result (if (instance? org.postgresql.util.PGobject (:gemini_result db-image))
+                                 (json/parse-string (.getValue (:gemini_result db-image)) true)
+                                 (:gemini_result db-image))]
+             (println "Retrieved image from DB:" db-image)
+             (println "Processed gemini_result:" gemini-result)
+             (is (= "completed" (:status db-image)) "Expected completed status")
+             (is (map? gemini-result) "Expected gemini_result to be a map")
+             (is (= {:mock_result "Analyzed data with latest and Image analysis"} gemini-result)
+                 "Expected correct Gemini result"))))))))
+
+
+
