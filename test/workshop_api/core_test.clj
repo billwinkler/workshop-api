@@ -189,12 +189,14 @@
 
 (deftest test-json-body-middleware
   (testing "JSON body parsing"
-    (let [request (-> (mock/request :post "/test")
+    (let [handler (fn [request] (response {:received-body (:body request)}))
+          wrapped-handler (wrap-json-body handler {:keywords? true :malformed-response {:status 400 :body "Invalid JSON"}})
+          request (-> (mock/request :post "/test")
                       (mock/json-body {:model_version "latest" :analysis_type "Image analysis"}))
           body-str (slurp (:body request))
           request (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
-          response (app request)
-          response-body (json/parse-string (:body response) true)]
+          response (wrapped-handler request)
+          response-body (:body response)] ; No json/parse-string since no wrap-json-response
       (println "Raw JSON body:" body-str)
       (println "Response body:" response-body)
       (is (= 200 (:status response)) "Expected 200 status")

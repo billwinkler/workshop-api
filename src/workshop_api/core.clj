@@ -32,12 +32,14 @@
   (into {} (map (fn [[k v]] [(if (string? k) (keyword k) k) v]) m)))
 
 (defn valid-location? [loc]
-  (and (string? (:name loc))
-       (string? (:type loc))
-       (string? (:area loc))
-       (or (nil? (:label loc)) (string? (:label loc)))
-       (or (nil? (:description loc)) (string? (:description loc)))
-       (or (nil? (:parent_id loc)) (string? (:parent_id loc)))))
+  (let [result (and (string? (:name loc))
+                    (string? (:type loc))
+                    (string? (:area loc))
+                    (or (nil? (:label loc)) (string? (:label loc)))
+                    (or (nil? (:description loc)) (string? (:description loc)))
+                    (or (nil? (:parent_id loc)) (string? (:parent_id loc))))]
+    (println "Validating location:" loc "Result:" result)
+    result))
 
 (defn valid-item? [item]
   (let [name-ok (string? (:name item))
@@ -51,6 +53,7 @@
         notes-ok (or (nil? (:notes item)) (string? (:notes item)))
         acq-date-ok (or (nil? (:acquisition_date item)) (string? (:acquisition_date item)))
         result (and name-ok desc-ok loc-id-ok cat-ok sup-ok part-ok url-ok qty-ok notes-ok acq-date-ok)]
+    (println "Validating item:" item "Result:" result)
     result))
 
 (defn valid-partial-item? [item]
@@ -74,9 +77,12 @@
        (or (nil? (:parent_id loc)) (string? (:parent_id loc)))))
 
 (defn valid-image? [image]
-  (and (string? (:image_data image))
-       (string? (:mime_type image))
-       (or (nil? (:filename image)) (string? (:filename image)))))
+  (let [result 
+        (and (string? (:image_data image))
+             (string? (:mime_type image))
+             (or (nil? (:filename image)) (string? (:filename image))))]
+        (println "Validating image:" image "Result:" result)
+        result))
 
 (defn valid-uuid? [s]
   (try
@@ -332,6 +338,8 @@
 
 (defn add-location [request]
   (let [loc (keywordize-keys (:body request))]
+    (println "add-location received body:" (:body request))
+    (println "add-location keywordized:" loc)
     (if (valid-location? loc)
       (let [new-loc (prepare-location loc)]
         (db-add-location new-loc)
@@ -360,14 +368,22 @@
 
 (defn add-item [request]
   (let [item (keywordize-keys (:body request))]
+    (println "add-item received body:" (:body request))
+    (println "add-item keywordized:" item)
     (if (valid-item? item)
       (try
         (let [new-item (prepare-item item)]
-          (db-add-item new-item)
-          (response new-item))
+          (if (db-get-location (:location_id new-item))
+            (do
+              (db-add-item new-item)
+              (response new-item))
+            (status (response {:error "Location not found"}) 400)))
         (catch Exception e
-          (status (response {:error "Database error" :message (.getMessage e)}) 400)))
+          (if (str/includes? (.getMessage e) "foreign key constraint")
+            (status (response {:error "Database error" :message "Invalid location_id"}) 400)
+            (status (response {:error "Database error" :message (.getMessage e)}) 400))))
       (status (response {:error "Invalid item format" :data item}) 400))))
+
 
 (defn get-all-items [_request]
   (let [items (db-get-all-items)]
@@ -468,6 +484,8 @@
 
 (defn add-image [request]
   (let [image (keywordize-keys (:body request))]
+    (println "add-image received body:" (:body request))
+    (println "add-image keywordized:" image)
     (if (valid-image? image)
       (try
         (let [new-image (prepare-image image)]
@@ -658,54 +676,34 @@
     (println "Unmatched request:" (:uri request))
     (status (response {:error "Route not found" :uri (:uri request)}) 404)))
 
-(defn wrap-debug-json-body [handler]
+(defn wrap-log-json-body [handler]
   (fn [request]
-    (println "wrap-json-body processing request:" (dissoc request :body))
-    (println "wrap-json-body raw body:" (if (:body request)
-                                          (try
-                                            (slurp (:body request))
-                                            (catch Exception e
-                                              (println "Error reading body:" (.getMessage e))
-                                              ""))
-                                          "No body"))
-    (let [response (handler request)]
-      (println "wrap-json-body parsed body:" (:body request))
-      response)))
+    (println "Before wrap-json-body, raw body:" (if (:body request)
+                                                   (try
+                                                     (slurp (:body request))
+                                                     (catch Exception e
+                                                       (println "Error reading body:" (.getMessage e))
+                                                       "Error"))
+                                                   "No body"))
+    (let [new-request (handler request)]
+      (println "After wrap-json-body, parsed body:" (:body new-request))
+      new-request)))
 
-(defn wrap-debug-request [handler]
+(defn wrap-debug [handler]
   (fn [request]
-    (let [body-str (if (:body request)
-                     (try
-                       (slurp (:body request))
-                       (catch Exception e
-                         (println "Error reading body:" (.getMessage e))
-                         ""))
-                     "No body")
-          parsed-body (if (and body-str (not-empty body-str))
-                        (try
-                          (json/parse-string body-str true)
-                          (catch Exception e
-                            (println "JSON parse error:" (.getMessage e))
-                            nil))
-                        nil)
-          new-request (if body-str
-                        (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
-                        request)]
-      (println "Incoming request:" (dissoc new-request :body))
-      (println "Raw body:" body-str)
-      (println "Parsed body:" parsed-body)
-      (handler new-request))))
+    (println "Incoming request:" (dissoc request :body))
+    (println "Parsed body:" (:body request))
+    (handler request)))
 
 (def app
   (-> (routes test-routes app-routes)
+      (wrap-log-json-body)
       (wrap-json-body {:keywords? true :malformed-response {:status 400 :body "Invalid JSON"}})
       wrap-params
-      wrap-debug-json-body
-      wrap-debug-request
+      wrap-debug
       wrap-json-response
       (wrap-cors :access-control-allow-origin [#".*"]
                  :access-control-allow-methods [:get :post :patch :delete])))
-
 (defn test-connection []
   (try
     (jdbc/execute-one! ds ["SELECT 1"])
