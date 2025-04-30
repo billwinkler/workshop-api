@@ -7,6 +7,7 @@
             [ring.util.response :refer [response status]]
             [ring.middleware.cors :refer [wrap-cors]]
             [next.jdbc :as jdbc]
+            [next.jdbc.sql :as sql]
             [next.jdbc.result-set :as rs]
             [clojure.string :as str]
             [workshop-api.gemini-describe :as gemini]
@@ -16,8 +17,13 @@
   (:import [java.sql Timestamp]
            [java.time Instant]))
 
-(def db-spec {:dbtype "postgresql" :dbname "workshop_inventory" :host "localhost" :user "billwinkler" :password (System/getenv "DB_PASSWORD")})
-(def ds (jdbc/get-datasource db-spec))
+(defn get-db-spec []
+  (let [env (System/getenv "DB_ENV")]
+    (if (= env "test")
+      {:dbtype "postgresql" :dbname "workshop_inventory_test" :host "localhost" :user "billwinkler" :password (System/getenv "DB_PASSWORD")}
+      {:dbtype "postgresql" :dbname "workshop_inventory" :host "localhost" :user "billwinkler" :password (System/getenv "DB_PASSWORD")})))
+
+(def ds (jdbc/get-datasource (get-db-spec)))
 
 (defn generate-id [] (str (java.util.UUID/randomUUID)))
 (defn current-timestamp [] (Timestamp/from (Instant/now)))
@@ -106,11 +112,17 @@
         (assoc :updated_at now))))
 
 (defn db-add-location [loc]
-  (jdbc/execute-one! ds
-                     ["INSERT INTO locations (id, label, name, type, description, parent_id, area, created_at, updated_at)
-                       VALUES (?::uuid, ?, ?, ?, ?, ?::uuid, ?, ?, ?)"
-                      (:id loc) (:label loc) (:name loc) (:type loc) (:description loc) (:parent_id loc) (:area loc) (:created_at loc) (:updated_at loc)]
-                     {:return-keys true}))
+  (try
+    (jdbc/with-transaction [tx ds]
+      (let [result (jdbc/execute-one! tx
+                                     ["INSERT INTO locations (id, label, name, type, description, parent_id, area, created_at, updated_at)
+                                       VALUES (?::uuid, ?, ?, ?, ?, ?::uuid, ?, ?, ?)"
+                                      (:id loc) (:label loc) (:name loc) (:type loc) (:description loc) (:parent_id loc) (:area loc) (:created_at loc) (:updated_at loc)]
+                                     {:return-keys true})]
+        result))
+    (catch Exception e
+      (println "Transaction failed:" (.getMessage e))
+      (throw e))))
 
 (defn db-add-item [item]
   (jdbc/execute-one! ds
@@ -215,10 +227,6 @@
                        JOIN locations l ON i.location_id = l.id
                        WHERE i.id = ?::uuid" id]
                      {:builder-fn rs/as-unqualified-lower-maps}))
-
-(defn get-all-items [_request]
-  (let [items (db-get-all-items)]
-    (response items)))
 
 (defn db-check-location-items [id]
   (jdbc/execute-one! ds
@@ -343,6 +351,10 @@
         (catch Exception e
           (status (response {:error "Database error" :message (.getMessage e)}) 400)))
       (status (response {:error "Invalid item format" :data item}) 400))))
+
+(defn get-all-items [_request]
+  (let [items (db-get-all-items)]
+    (response items)))
 
 (defn update-item [request id]
   (let [item (keywordize-keys (:body request))]
