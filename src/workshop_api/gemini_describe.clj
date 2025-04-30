@@ -50,12 +50,14 @@
 (defn call-gemini-api [base64-image config notes]
   (let [api-key (or key/GEMINI_API_KEY
                     (throw (Exception. "GEMINI_API_KEY environment variable not set")))
+        config (keyword config) ;; force the config to a keyword
         {:keys [model]} (get configurations config)
         _ (println "Model:" model)
         url (str model-base-url model ":generateContent?key=" api-key)
         body (make-request-body base64-image config)
         temp-file "/tmp/gemini_request.json"]
     (println "Preparing Gemini API call with model:" model "Config:" config "Notes:" notes)
+;;    (println "Request URL:" url)
     (println "Request body size:" (count body) "bytes")
     (try
       (spit temp-file body)
@@ -72,6 +74,12 @@
                               :as :json})
                   (catch Exception e    ; <-- Correct use of catch
                     (println "API call failed:" (.getMessage e) "Status:" (:status (ex-data e)))
+                    (println "Response headers:" (get-in (ex-data e) [:headers]))
+                    (println "Response body:" (try
+                                                  (slurp (get-in (ex-data e) [:body]))
+                                                  (catch Exception e2
+                                                    (println "Error reading response body:" (.getMessage e2))
+                                                    "Unreadable")))
                     (if (and (= (:status (ex-data e)) 429) (< attempt max-retries))
                       (let [retry-after (or (some-> (get-in (ex-data e) [:headers :retry-after])
                                                     (Integer/parseInt))

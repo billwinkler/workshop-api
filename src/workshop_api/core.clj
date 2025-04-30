@@ -177,7 +177,7 @@
     (let [image (jdbc/execute-one! ds
                                    ["SELECT * FROM images WHERE id = ?::uuid" id]
                                    {:builder-fn rs/as-unqualified-lower-maps})]
-      (println "db-get-image query for ID:" id "result:" image)
+;;      (println "db-get-image query for ID:" id "result:" image)
       (if image
         (update image :gemini_result
                 #(when % 
@@ -541,6 +541,22 @@
         (println "Invalid UUID format:" id)
         (status (response {:error "Invalid UUID format" :id id}) 400)))))
 
+(defn get-image-analysis [id]
+  (try
+    (if (valid-uuid? id)
+      (if-let [image (db-get-image id)]
+        (let [status (:status image)
+              response {:status status}]
+          (cond
+            (= status "failed") {:status 200 :body (assoc response :error_message (:error_message image))}
+            (= status "completed") {:status 200 :body (assoc response :gemini_result (:gemini_result image))}
+            :else {:status 200 :body response}))
+        {:status 404 :body {:error "Image not found"}})
+      {:status 400 :body {:error "Invalid UUID format" :id id}})
+    (catch Exception e
+      (println "Error in get-image-analysis for ID:" id "Error:" (.getMessage e))
+      {:status 500 :body {:error "Internal server error" :message (.getMessage e)}})))
+
 (defn get-image [id]
   (if-let [image (db-get-image id)]
     (response image)
@@ -669,6 +685,7 @@
   (GET "/api/location/:param" [param] (get-location-by-name-or-label param))
   (POST "/api/images" request (add-image request))
   (GET "/api/images/:id" [id] (get-image id))
+  (GET  "/api/images/:id/analyze" [id :as request] (get-image-analysis id)) ;; New route
   (POST "/api/images/:id/analyze" [id :as request] (analyze-image request id))
   (POST "/api/item-images" request (add-item-image request))
   (DELETE "/api/item-images/:item_id/:image_id" [item-id image-id] (delete-item-image item-id image-id))
