@@ -80,7 +80,7 @@
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
           _ (do
-              (println "Inserting location:" location)
+;;              (println "Inserting location:" location)
               (db-add-location location))
           item {:name "Screwdriver"
                 :description "Phillips head screwdriver"
@@ -90,7 +90,7 @@
           request (-> (mock/request :post "/api/items")
                       (mock/json-body item))
           response (app request)]
-      (println "Item response:" (:body response))
+;;      (println "Item response:" (:body response))
       (let [response-body (try (json/parse-string (:body response) true)
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
@@ -187,6 +187,16 @@
           (> (- (System/currentTimeMillis) start-time) timeout-ms) (throw (ex-info "Timeout waiting for image status" {:image-id image-id :expected-status expected-status}))
           :else (do (Thread/sleep 100) (recur)))))))
 
+(deftest test-malformed-json
+  (testing "Handling malformed JSON"
+    (let [request (-> (mock/request :post "/api/items")
+                      (assoc :body (java.io.ByteArrayInputStream. (.getBytes "{")))
+                      (assoc-in [:headers "content-type"] "application/json")
+                      (assoc-in [:headers "content-length"] "1"))
+          response (app request)]
+      (is (= 400 (:status response)) "Expected 400 status")
+      (is (= "Invalid JSON" (:body response)) "Expected error message"))))
+
 (deftest test-json-body-middleware
   (testing "JSON body parsing"
     (let [handler (fn [request] (response {:received-body (:body request)}))
@@ -197,8 +207,8 @@
           request (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
           response (wrapped-handler request)
           response-body (:body response)] ; No json/parse-string since no wrap-json-response
-      (println "Raw JSON body:" body-str)
-      (println "Response body:" response-body)
+;;      (println "Raw JSON body:" body-str)
+;;      (println "Response body:" response-body)
       (is (= 200 (:status response)) "Expected 200 status")
       (is (map? (:received-body response-body)) "Expected parsed JSON body to be a map")
       (is (= {:model_version "latest" :analysis_type "Image analysis"} (:received-body response-body))
@@ -215,30 +225,30 @@
                                                  VALUES (?::uuid, ?, ?, ?, ?, ?)"
                                                  image-id "data" "image/jpeg" "pending" (current-timestamp) (current-timestamp)]
                                                 {:builder-fn rs/as-unqualified-lower-maps :return-keys true})
-               _ (println "Insert result:" insert-result)
+;;               _ (println "Insert result:" insert-result)
                image-from-db (db-get-image image-id tx)
-               _ (println "Image from DB before request:" image-from-db)
+;;               _ (println "Image from DB before request:" image-from-db)
                request (-> (mock/request :post (str "/api/images/" image-id "/analyze"))
                            (mock/json-body {:model_version "latest" :analysis_type "Image analysis"}))
                body-str (slurp (:body request))
                request (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
-               _ (println "Raw JSON body:" body-str)
-               _ (println "Parsed body map:" (try
-                                               (json/parse-string body-str true)
-                                               (catch Exception e
-                                                 (println "JSON parse error:" (.getMessage e))
-                                                 nil)))
+;;               _ (println "Raw JSON body:" body-str)
+               ;; _ (println "Parsed body map:" (try
+               ;;                                 (json/parse-string body-str true)
+               ;;                                 (catch Exception e
+               ;;                                   (println "JSON parse error:" (.getMessage e))
+               ;;                                   nil)))
                response (app (assoc request :next.jdbc/connection tx))
                response-body (json/parse-string (:body response) true)]
-           (println "Response status:" (:status response))
-           (println "Response body:" response-body)
+;;           (println "Response status:" (:status response))
+;;           (println "Response body:" response-body)
            (is (= 200 (:status response)) "Expected 200 status")
            (is (= "analysis_started" (:status response-body)) "Expected analysis started status")
            (let [db-image (wait-for-image-status tx image-id "completed" 5000)
                  gemini-result (if (instance? org.postgresql.util.PGobject (:gemini_result db-image))
                                  (json/parse-string (.getValue (:gemini_result db-image)) true)
                                  (:gemini_result db-image))]
-             (println "Retrieved image from DB:" db-image)
+;;             (println "Retrieved image from DB:" db-image)
              (println "Processed gemini_result:" gemini-result)
              (is (= "completed" (:status db-image)) "Expected completed status")
              (is (map? gemini-result) "Expected gemini_result to be a map")

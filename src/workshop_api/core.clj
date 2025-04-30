@@ -38,7 +38,7 @@
                     (or (nil? (:label loc)) (string? (:label loc)))
                     (or (nil? (:description loc)) (string? (:description loc)))
                     (or (nil? (:parent_id loc)) (string? (:parent_id loc))))]
-    (println "Validating location:" loc "Result:" result)
+;;    (println "Validating location:" loc "Result:" result)
     result))
 
 (defn valid-item? [item]
@@ -53,7 +53,7 @@
         notes-ok (or (nil? (:notes item)) (string? (:notes item)))
         acq-date-ok (or (nil? (:acquisition_date item)) (string? (:acquisition_date item)))
         result (and name-ok desc-ok loc-id-ok cat-ok sup-ok part-ok url-ok qty-ok notes-ok acq-date-ok)]
-    (println "Validating item:" item "Result:" result)
+;;    (println "Validating item:" item "Result:" result)
     result))
 
 (defn valid-partial-item? [item]
@@ -81,7 +81,7 @@
         (and (string? (:image_data image))
              (string? (:mime_type image))
              (or (nil? (:filename image)) (string? (:filename image))))]
-        (println "Validating image:" image "Result:" result)
+;;        (println "Validating image:" image "Result:" result)
         result))
 
 (defn valid-uuid? [s]
@@ -338,8 +338,8 @@
 
 (defn add-location [request]
   (let [loc (keywordize-keys (:body request))]
-    (println "add-location received body:" (:body request))
-    (println "add-location keywordized:" loc)
+;;    (println "add-location received body:" (:body request))
+;;    (println "add-location keywordized:" loc)
     (if (valid-location? loc)
       (let [new-loc (prepare-location loc)]
         (db-add-location new-loc)
@@ -367,10 +367,10 @@
     (status (response {:error "Location not found"}) 404)))
 
 (defn add-item [request]
-  (println "add-item raw request:" (dissoc request :body))
-  (println "add-item received body:" (:body request))
+;;  (println "add-item raw request:" (dissoc request :body))
+;;  (println "add-item received body:" (:body request))
   (let [item (keywordize-keys (:body request))]
-    (println "add-item keywordized:" item)
+;;    (println "add-item keywordized:" item)
     (if (map? (:body request))
       (if (valid-item? item)
         (try
@@ -486,8 +486,8 @@
 
 (defn add-image [request]
   (let [image (keywordize-keys (:body request))]
-    (println "add-image received body:" (:body request))
-    (println "add-image keywordized:" image)
+;;    (println "add-image received body:" (:body request))
+;;    (println "add-image keywordized:" image)
     (if (valid-image? image)
       (try
         (let [new-image (prepare-image image)]
@@ -502,7 +502,7 @@
   (println "Analyzing image with ID:" id)
   (println "Raw request body:" (:body request))
   (let [conn (or (:next.jdbc/connection request) ds)]
-    (println "Using database:" conn)
+;;    (println "Using database:" conn)
     (let [images (jdbc/execute! conn
                                 ["SELECT * FROM images"]
                                 {:builder-fn rs/as-unqualified-lower-maps})]
