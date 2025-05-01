@@ -9,9 +9,10 @@
             [cheshire.core :as json]
             [workshop-api.core :refer [app ds generate-id current-timestamp db-add-location
                                        db-get-image db-add-item db-add-image db-add-user prepare-user
-                                       auth-backend wrap-authentication]]
+                                       auth-backend]]
             [buddy.sign.jwt :as jwt]
-            [buddy.hashers :as hashers]            
+            [buddy.hashers :as hashers]
+            [buddy.auth.middleware :refer [wrap-authentication]]            
             [clojure.string :as str]))
 
 (def jwt-secret (or (System/getenv "JWT_SECRET") "your-secure-secret-here"))
@@ -516,18 +517,6 @@
         verified (jwt/unsign token jwt-secret {:alg :hs256})]
     (is (= payload verified) "JWT signing and verification should match")))
 
-(deftest test-jws-backend
-  (let [user {:id (generate-id) :username "testuser"}
-        payload {:user_id (:id user) :username (:username user)
-                 :iat (quot (System/currentTimeMillis) 1000)
-                 :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))} ; 1 hour
-        token (jwt/sign payload jwt-secret {:alg :hs256})
-        request {:headers {"Authorization" (str "Bearer " token)}}
-        authenticated-request ((wrap-authentication identity jwt-secret) request)]
-    (is (some? (:identity authenticated-request)) "Expected auth data to be parsed")
-    (is (= (:id user) (get-in authenticated-request [:identity :user_id])) "Expected correct user_id") ; Changed :user_id to :id
-    (is (= "testuser" (get-in authenticated-request [:identity :username])) "Expected correct username")))
-
 (deftest test-jws-backend-minimal
   (let [user {:id (generate-id) :username "testuser"}
         payload {:user_id (:id user) :username (:username user)
@@ -545,7 +534,7 @@
     (is (= (:id user) (get-in response [:identity :user_id])) "Expected correct user_id")
     (is (= "testuser" (get-in response [:identity :username])) "Expected correct username")))
 
-(deftest test-jws-backend-original
+(deftest test-jws-backend
   (let [user {:id (generate-id) :username "testuser"}
         payload {:user_id (:id user) :username (:username user)
                  :iat (quot (System/currentTimeMillis) 1000)
@@ -628,7 +617,7 @@
     (let [user {:id (generate-id) :username "testuser"}
           payload {:user_id (:id user) :username (:username user)
                    :iat (quot (System/currentTimeMillis) 1000)
-                   :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))} ; 1 hour
+                   :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
           _ (println "Generated token:" token)
           decoded (jwt/unsign token jwt-secret {:alg :hs256})
@@ -645,7 +634,8 @@
                             {}))]
       (println "Valid JWT response:" response)
       (is (= 200 (:status response)) "Expected 200 status")
-      (is (= "Tool Shed" (:name response-body)) "Expected correct location name")))
+      (is (= "Tool Shed" (:name response-body)) "Expected correct location name")
+      (is (str/starts-with? (get-in response [:headers "Content-Type"]) "application/json") "Expected JSON content type")))
 
   (testing "Accessing protected route without JWT"
     (let [location {:label "L1" :name "Tool Shed" :type "Shed" :area "Backyard" :description "Storage for tools"}
@@ -677,5 +667,4 @@
       (is (= 401 (:status response)) "Expected 401 status")
       (is (= "Unauthorized" (:message response-body)) "Expected error message")
       (is (str/starts-with? (get-in response [:headers "Content-Type"]) "application/json") "Expected JSON content type"))))
-
 

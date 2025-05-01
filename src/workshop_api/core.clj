@@ -16,9 +16,7 @@
             [clojure.edn :as edn]
             [buddy.auth :refer [authenticated? throw-unauthorized]]
             [buddy.auth.backends.token :refer [jws-backend]]
-;;            [buddy.auth.backends :as backends]
-            ;;            [buddy.auth.middleware :refer [wrap-authentication wrap-authorization]]
-            [buddy.auth.middleware :refer [wrap-authorization]]
+            [buddy.auth.middleware :refer [wrap-authentication wrap-authorization]]
             [buddy.hashers :as hashers]
             [buddy.sign.jwt :as jwt])
   (:import [java.sql Timestamp]
@@ -764,24 +762,6 @@
     (println "Parsed body:" (:body request))
     (handler request)))
 
-(defn wrap-authentication [handler backend]
-  (fn [request]
-    (let [auth-header (get-in request [:headers "Authorization"])
-          token (when (and auth-header (re-find #"^Bearer\s+" auth-header))
-                  (subs auth-header 7))]
-      (println "in wrap-authentication, auth-header:" auth-header)
-      (println "in wrap-authentication, token:" token)
-      (let [identity (when token
-                       (try
-                         (let [decoded (jwt/unsign token jwt-secret {:alg :hs256})]
-                           (println "in wrap-authentication, decoded:" decoded)
-                           decoded)
-                         (catch Exception e
-                           (println "Manual JWT validation error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
-                           nil)))]
-        (println "in wrap-authentication, identity:" identity)
-        (handler (assoc request :identity identity))))))
-
 (defn wrap-auth [handler]
   (fn [request]
     (if (authenticated? request)
@@ -850,7 +830,7 @@
       (wrap-json-body {:keywords? true :malformed-response {:status 400 :body "Invalid JSON"}})
       wrap-params
       wrap-error-handling
-      (wrap-authentication jwt-secret)
+      (wrap-authentication auth-backend)
       (wrap-authorization auth-backend)
       ;;      wrap-debug
       wrap-json-response
