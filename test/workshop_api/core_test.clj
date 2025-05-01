@@ -7,9 +7,15 @@
             [next.jdbc.sql :as sql]
             [next.jdbc.result-set :as rs]
             [cheshire.core :as json]
-            [workshop-api.core :refer [app ds generate-id current-timestamp db-add-location db-get-image db-add-item db-add-image]]
+            [workshop-api.core :refer [app ds generate-id current-timestamp db-add-location
+                                       db-get-image db-add-item db-add-image db-add-user prepare-user
+                                       auth-backend wrap-authentication]]
+            [buddy.sign.jwt :as jwt]
+            [buddy.hashers :as hashers]            
             [clojure.string :as str]))
 
+(def jwt-secret (or (System/getenv "JWT_SECRET") "your-secure-secret-here"))
+(def jwt-secret "justkidding")
 ;; Mock gemini/call-gemini-api to avoid external calls
 (defn mock-gemini-api [image-data model-version analysis-type]
   (let [model-str (if (keyword? model-version)
@@ -38,7 +44,7 @@
   (with-redefs [workshop-api.gemini-describe/call-gemini-api mock-gemini-api]
     (f))
   (try
-    (jdbc/execute! ds ["TRUNCATE TABLE item_images, location_images, items, images, locations RESTART IDENTITY"])
+    (jdbc/execute! ds ["TRUNCATE TABLE item_images, location_images, items, images, locations, users RESTART IDENTITY"])
     (catch Exception e
       (println "Failed to truncate tables:" (.getMessage e)))))
 
@@ -502,3 +508,174 @@
              (is (map? gemini-result) "Expected gemini_result to be a map")
              (is (= {:mock_result "Analyzed data with latest and Image analysis"} gemini-result)
                  "Expected correct Gemini result"))))))))
+
+(deftest test-jwt-sign-verify
+  (let [jwt-secret "justkidding"
+        payload {:user_id (generate-id) :username "testuser"}
+        token (jwt/sign payload jwt-secret {:alg :hs256})
+        verified (jwt/unsign token jwt-secret {:alg :hs256})]
+    (is (= payload verified) "JWT signing and verification should match")))
+
+(deftest test-jws-backend
+  (let [user {:id (generate-id) :username "testuser"}
+        payload {:user_id (:id user) :username (:username user)
+                 :iat (quot (System/currentTimeMillis) 1000)
+                 :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))} ; 1 hour
+        token (jwt/sign payload jwt-secret {:alg :hs256})
+        request {:headers {"Authorization" (str "Bearer " token)}}
+        authenticated-request ((wrap-authentication identity jwt-secret) request)]
+    (is (some? (:identity authenticated-request)) "Expected auth data to be parsed")
+    (is (= (:id user) (get-in authenticated-request [:identity :user_id])) "Expected correct user_id") ; Changed :user_id to :id
+    (is (= "testuser" (get-in authenticated-request [:identity :username])) "Expected correct username")))
+
+(deftest test-jws-backend-minimal
+  (let [user {:id (generate-id) :username "testuser"}
+        payload {:user_id (:id user) :username (:username user)
+                 :iat (quot (System/currentTimeMillis) 1000)
+                 :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+        token (jwt/sign payload jwt-secret {:alg :hs256})
+        request {:headers {"Authorization" (str "Bearer " token)}}
+        handler (fn [req] req) ; Return request to inspect identity
+        app (buddy.auth.middleware/wrap-authentication handler auth-backend)
+        response (app request)]
+    (println "jws-backend minimal test, token:" token)
+    (println "jws-backend minimal test, request headers:" (:headers request))
+    (println "jws-backend minimal test, identity:" (:identity response))
+    (is (some? (:identity response)) "Expected auth data to be parsed")
+    (is (= (:id user) (get-in response [:identity :user_id])) "Expected correct user_id")
+    (is (= "testuser" (get-in response [:identity :username])) "Expected correct username")))
+
+(deftest test-jws-backend-original
+  (let [user {:id (generate-id) :username "testuser"}
+        payload {:user_id (:id user) :username (:username user)
+                 :iat (quot (System/currentTimeMillis) 1000)
+                 :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+        token (jwt/sign payload jwt-secret {:alg :hs256})
+        request {:headers {"Authorization" (str "Bearer " token)}}
+        authenticated-request ((buddy.auth.middleware/wrap-authentication identity auth-backend) request)]
+    (println "jws-backend test, token:" token)
+    (println "jws-backend test, request headers:" (:headers request))
+    (println "jws-backend test, identity:" (:identity authenticated-request))
+    (is (some? (:identity authenticated-request)) "Expected auth data to be parsed")
+    (is (= (:id user) (get-in authenticated-request [:identity :user_id])) "Expected correct user_id")
+    (is (= "testuser" (get-in authenticated-request [:identity :username])) "Expected correct username")))
+
+(deftest test-user-registration
+  (testing "Registering a valid user"
+    (let [user {:username "testuser" :password "securepassword123"}
+          request (-> (mock/request :post "/api/register")
+                      (mock/json-body user))
+          response (app request)
+          response-body (json/parse-string (:body response) true)
+          db-user (find-by-keys-unqualified ds :users {:username "testuser"})]
+      (is (= 200 (:status response)) "Expected 200 status")
+      (is (= "testuser" (:username (:user response-body))) "Expected correct username in response")
+      (is (string? (:token response-body)) "Expected JWT token in response")
+      (is (= 1 (count db-user)) "Expected one user in database")
+      (is (= "testuser" (:username (first db-user))) "Expected correct username in database")
+      (is (hashers/check "securepassword123" (:password_hash (first db-user))) "Expected correct password hash")))
+
+  (testing "Registering with existing username"
+    (let [user {:username "testuser" :password "securepassword123"}
+          request (-> (mock/request :post "/api/register")
+                      (mock/json-body user))
+          response (app request)
+          response-body (json/parse-string (:body response) true)]
+      (is (= 400 (:status response)) "Expected 400 status")
+      (is (= "Username already exists" (:error response-body)) "Expected error message")))
+
+  (testing "Registering with invalid user data"
+    (let [user {:username "ab" :password "short"}
+          request (-> (mock/request :post "/api/register")
+                      (mock/json-body user))
+          response (app request)
+          response-body (json/parse-string (:body response) true)]
+      (is (= 400 (:status response)) "Expected 400 status")
+      (is (= "Invalid user format" (:error response-body)) "Expected error message"))))
+
+(deftest test-user-login
+  (testing "Logging in with valid credentials"
+    (let [user {:username "testuser" :password "securepassword123"}
+          _ (db-add-user (prepare-user user))
+          request (-> (mock/request :post "/api/login")
+                      (mock/json-body user))
+          response (app request)
+          response-body (json/parse-string (:body response) true)]
+      (is (= 200 (:status response)) "Expected 200 status")
+      (is (= "testuser" (:username (:user response-body))) "Expected correct username in response")
+      (is (string? (:token response-body)) "Expected JWT token in response")))
+
+  (testing "Logging in with invalid credentials"
+    (let [user {:username "testuser" :password "wrongpassword"}
+          request (-> (mock/request :post "/api/login")
+                      (mock/json-body user))
+          response (app request)
+          response-body (json/parse-string (:body response) true)]
+      (is (= 401 (:status response)) "Expected 401 status")
+      (is (= "Invalid credentials" (:error response-body)) "Expected error message")))
+
+  (testing "Logging in with missing credentials"
+    (let [user {:username "testuser"}
+          request (-> (mock/request :post "/api/login")
+                      (mock/json-body user))
+          response (app request)
+          response-body (json/parse-string (:body response) true)]
+      (is (= 400 (:status response)) "Expected 400 status")
+      (is (= "Missing username or password" (:error response-body)) "Expected error message"))))
+
+(deftest test-protected-route
+  (testing "Accessing protected route with valid JWT"
+    (let [user {:id (generate-id) :username "testuser"}
+          payload {:user_id (:id user) :username (:username user)
+                   :iat (quot (System/currentTimeMillis) 1000)
+                   :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))} ; 1 hour
+          token (jwt/sign payload jwt-secret {:alg :hs256})
+          _ (println "Generated token:" token)
+          decoded (jwt/unsign token jwt-secret {:alg :hs256})
+          _ (println "Decoded token:" decoded)
+          location {:label "L1" :name "Tool Shed" :type "Shed" :area "Backyard" :description "Storage for tools"}
+          request (-> (mock/request :post "/api/locations")
+                      (mock/json-body location)
+                      (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+          response (app request)
+          response-body (try
+                          (json/parse-string (:body response) true)
+                          (catch Exception e
+                            (println "Failed to parse response body:" (.getMessage e))
+                            {}))]
+      (println "Valid JWT response:" response)
+      (is (= 200 (:status response)) "Expected 200 status")
+      (is (= "Tool Shed" (:name response-body)) "Expected correct location name")))
+
+  (testing "Accessing protected route without JWT"
+    (let [location {:label "L1" :name "Tool Shed" :type "Shed" :area "Backyard" :description "Storage for tools"}
+          request (-> (mock/request :post "/api/locations")
+                      (mock/json-body location))
+          response (app request)
+          response-body (try
+                          (json/parse-string (:body response) true)
+                          (catch Exception e
+                            (println "Failed to parse response body:" (.getMessage e))
+                            {}))]
+      (println "No JWT response body:" (:body response))
+      (is (= 401 (:status response)) "Expected 401 status")
+      (is (= "Unauthorized" (:message response-body)) "Expected error message")
+      (is (str/starts-with? (get-in response [:headers "Content-Type"]) "application/json") "Expected JSON content type")))
+
+  (testing "Accessing protected route with invalid JWT"
+    (let [location {:label "L1" :name "Tool Shed" :type "Shed" :area "Backyard" :description "Storage for tools"}
+          request (-> (mock/request :post "/api/locations")
+                      (mock/json-body location)
+                      (assoc-in [:headers "Authorization"] "Bearer invalid.token.here"))
+          response (app request)
+          response-body (try
+                          (json/parse-string (:body response) true)
+                          (catch Exception e
+                            (println "Failed to parse response body:" (.getMessage e))
+                            {}))]
+      (println "Invalid JWT response body:" (:body response))
+      (is (= 401 (:status response)) "Expected 401 status")
+      (is (= "Unauthorized" (:message response-body)) "Expected error message")
+      (is (str/starts-with? (get-in response [:headers "Content-Type"]) "application/json") "Expected JSON content type"))))
+
+

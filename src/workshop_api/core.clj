@@ -13,9 +13,29 @@
             [workshop-api.gemini-describe :as gemini]
             [clojure.core.async :refer [go thread]]
             [cheshire.core :as json]
-            [clojure.edn :as edn])
+            [clojure.edn :as edn]
+            [buddy.auth :refer [authenticated? throw-unauthorized]]
+            [buddy.auth.backends.token :refer [jws-backend]]
+;;            [buddy.auth.backends :as backends]
+            ;;            [buddy.auth.middleware :refer [wrap-authentication wrap-authorization]]
+            [buddy.auth.middleware :refer [wrap-authorization]]
+            [buddy.hashers :as hashers]
+            [buddy.sign.jwt :as jwt])
   (:import [java.sql Timestamp]
            [java.time Instant]))
+
+;;(def jwt-secret (or (System/getenv "JWT_SECRET") "your-secure-secret-here"))
+(def jwt-secret "justkidding")
+(def auth-backend
+  (jws-backend
+    {:secret jwt-secret
+     :options {:alg :hs256}
+     :on-error (fn [request error]
+                 (println "JWT validation error for request:" (:headers request))
+                 (println "Error message:" (.getMessage error))
+                 (println "Error details:" error)
+                 (println "Stacktrace:" (.getStackTrace error)))
+     :token-name "Bearer"})) ; Explicitly set token-name
 
 (defn get-db-spec []
   (let [env (System/getenv "DB_ENV")]
@@ -101,6 +121,12 @@
     (and (or (nil? model-version) (keyword? model-version))
          (or (nil? (:analysis_type config)) (string? (:analysis_type config))))))
 
+(defn valid-user? [user]
+  (and (string? (:username user))
+       (string? (:password user))
+       (>= (count (:username user)) 3)
+       (>= (count (:password user)) 8)))
+
 (defn prepare-location [loc]
   (let [now (current-timestamp)]
     (-> loc
@@ -124,14 +150,23 @@
         (assoc :created_at now)
         (assoc :updated_at now))))
 
+(defn prepare-user [user]
+  (let [now (current-timestamp)]
+    (-> user
+        (assoc :id (generate-id))
+        (assoc :password_hash (hashers/derive (:password user) {:alg :bcrypt+sha512}))
+        (dissoc :password)
+        (assoc :created_at now)
+        (assoc :updated_at now))))
+
 (defn db-add-location [loc]
   (try
     (jdbc/with-transaction [tx ds]
       (let [result (jdbc/execute-one! tx
-                                     ["INSERT INTO locations (id, label, name, type, description, parent_id, area, created_at, updated_at)
+                                      ["INSERT INTO locations (id, label, name, type, description, parent_id, area, created_at, updated_at)
                                        VALUES (?::uuid, ?, ?, ?, ?, ?::uuid, ?, ?, ?)"
-                                      (:id loc) (:label loc) (:name loc) (:type loc) (:description loc) (:parent_id loc) (:area loc) (:created_at loc) (:updated_at loc)]
-                                     {:return-keys true})]
+                                       (:id loc) (:label loc) (:name loc) (:type loc) (:description loc) (:parent_id loc) (:area loc) (:created_at loc) (:updated_at loc)]
+                                      {:return-keys true})]
         result))
     (catch Exception e
       (println "Transaction failed:" (.getMessage e))
@@ -187,6 +222,22 @@
                        (println "Error parsing gemini_result:" (.getMessage e))
                        %))))
         image))))
+
+(defn db-add-user [user]
+  (try
+    (jdbc/execute-one! ds
+                       ["INSERT INTO users (id, username, password_hash, created_at, updated_at)
+                         VALUES (?::uuid, ?, ?, ?, ?)"
+                        (:id user) (:username user) (:password_hash user) (:created_at user) (:updated_at user)]
+                       {:return-keys true :builder-fn rs/as-unqualified-lower-maps})
+    (catch Exception e
+      (println "Failed to add user:" (.getMessage e))
+      (throw e))))
+
+(defn db-get-user-by-username [username]
+  (jdbc/execute-one! ds
+                     ["SELECT * FROM users WHERE username = ?" username]
+                     {:builder-fn rs/as-unqualified-lower-maps}))
 
 (defn db-update-item [id item]
   (let [now (current-timestamp)
@@ -562,6 +613,35 @@
     (response image)
     (status (response {:error "Image not found"}) 404)))
 
+(defn authenticate-user [username password]
+  (if-let [user (db-get-user-by-username username)]
+    (when (hashers/check password (:password_hash user))
+      (dissoc user :password_hash))
+    nil))
+
+(defn register-user [request]
+  (let [user (keywordize-keys (:body request))]
+    (if (valid-user? user)
+      (try
+        (if (db-get-user-by-username (:username user))
+          (status (response {:error "Username already exists"}) 400)
+          (let [new-user (prepare-user user)
+                db-user (db-add-user new-user)
+                token (jwt/sign {:user_id (:id db-user) :username (:username db-user)} jwt-secret {:alg :hs256})]
+            (response {:user (dissoc db-user :password_hash) :token token})))
+        (catch Exception e
+          (status (response {:error "Failed to register user" :message (.getMessage e)}) 500)))
+      (status (response {:error "Invalid user format" :data user}) 400))))
+
+(defn login-user [request]
+  (let [{:keys [username password]} (keywordize-keys (:body request))]
+    (if (and (string? username) (string? password))
+      (if-let [user (authenticate-user username password)]
+        (let [token (jwt/sign {:user_id (:id user) :username (:username user)} jwt-secret {:alg :hs256})]
+          (response {:user user :token token}))
+        (status (response {:error "Invalid credentials"}) 401))
+      (status (response {:error "Missing username or password"}) 400))))
+
 (defn build-location-hierarchy []
   (try
     (let [locations (jdbc/execute! ds
@@ -665,36 +745,6 @@
                 (db-search-items query))]
     (response items)))
 
-(defroutes test-routes
-  (POST "/test" request
-    (response {:received-body (:body request)})))
-
-(defroutes app-routes
-  (POST "/api/locations" request (add-location request))
-  (PATCH "/api/locations/:id" [id :as request] (update-location request id))
-  (DELETE "/api/locations/:id" [id] (delete-location id))
-  (GET "/api/locations/hierarchy" request (get-location-hierarchy request))
-  (GET "/api/locations/:id" [id] (get-location-details id))
-  (POST "/api/items" request (add-item request))
-  (PATCH "/api/items/:id" [id :as request] (update-item request id))
-  (DELETE "/api/items/:id" [id] (delete-item id))
-  (GET "/api/items/:id" [id] (get-item id))
-  (GET "/api/search" request (search-inventory request))
-  (GET "/api/items" request (get-all-items request))
-  (GET "/api/locations" request (get-all-locations request))
-  (GET "/api/location/:param" [param] (get-location-by-name-or-label param))
-  (POST "/api/images" request (add-image request))
-  (GET "/api/images/:id" [id] (get-image id))
-  (GET  "/api/images/:id/analyze" [id :as request] (get-image-analysis id)) ;; New route
-  (POST "/api/images/:id/analyze" [id :as request] (analyze-image request id))
-  (POST "/api/item-images" request (add-item-image request))
-  (DELETE "/api/item-images/:item_id/:image_id" [item-id image-id] (delete-item-image item-id image-id))
-  (POST "/api/location-images" request (add-location-image request))
-  (DELETE "/api/location-images/:location_id/:image_id" [location-id image-id] (delete-location-image location-id image-id))
-  (ANY "*" request
-    (println "Unmatched request:" (:uri request))
-    (status (response {:error "Route not found" :uri (:uri request)}) 404)))
-
 (defn wrap-log-json-body [handler]
   (fn [request]
     (println "Before wrap-json-body, raw body:" (if (:body request)
@@ -714,15 +764,99 @@
     (println "Parsed body:" (:body request))
     (handler request)))
 
+(defn wrap-authentication [handler backend]
+  (fn [request]
+    (let [auth-header (get-in request [:headers "Authorization"])
+          token (when (and auth-header (re-find #"^Bearer\s+" auth-header))
+                  (subs auth-header 7))]
+      (println "in wrap-authentication, auth-header:" auth-header)
+      (println "in wrap-authentication, token:" token)
+      (let [identity (when token
+                       (try
+                         (let [decoded (jwt/unsign token jwt-secret {:alg :hs256})]
+                           (println "in wrap-authentication, decoded:" decoded)
+                           decoded)
+                         (catch Exception e
+                           (println "Manual JWT validation error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
+                           nil)))]
+        (println "in wrap-authentication, identity:" identity)
+        (handler (assoc request :identity identity))))))
+
+(defn wrap-auth [handler]
+  (fn [request]
+    (if (authenticated? request)
+      (handler request)
+      (do (println "in wrap-auth, throwing unauthorized:")
+          (throw-unauthorized {:message "Unauthorized"})))))
+
+(defn wrap-error-handling [handler]
+  (fn [request]
+    (try
+      (handler request)
+      (catch clojure.lang.ExceptionInfo e
+        (println "in wrap-error-handling, ex-data:" (ex-data e))
+        (if (= (:buddy.auth/type (ex-data e)) :buddy.auth/unauthorized)
+          (status (response {:message "Unauthorized"}) 401)
+          (do
+            (println "Unexpected error:" (.getMessage e))
+            (status (response {:error "Internal server error" :message (.getMessage e)}) 500)))))))
+
+(defroutes test-routes
+  (POST "/test" request
+    (response {:received-body (:body request)})))
+
+(defroutes protected-routes
+  (POST "/locations" request (add-location request))
+  (PATCH "/locations/:id" [id :as request] (update-location request id))
+  (DELETE "/locations/:id" [id] (delete-location id))
+  (POST "/items" request (add-item request))
+  (PATCH "/items/:id" [id :as request] (update-item request id))
+  (DELETE "/items/:id" [id] (delete-item id))
+  (POST "/images" request (add-image request))
+  (POST "/images/:id/analyze" [id :as request] (analyze-image request id))
+  (POST "/item-images" request (add-item-image request))
+  (DELETE "/item-images/:item_id/:image_id" [item-id image-id] (delete-item-image item-id image-id))
+  (POST "/location-images" request (add-location-image request))
+  (DELETE "/location-images/:location_id/:image_id" [location-id image-id] (delete-location-image location-id image-id)))
+
+(defroutes public-routes
+  (GET "/locations/hierarchy" request (get-location-hierarchy request))
+  (GET "/locations/:id" [id] (get-location-details id))
+  (GET "/items/:id" [id] (get-item id))
+  (GET "/search" request (search-inventory request))
+  (GET "/items" request (get-all-items request))
+  (GET "/locations" request (get-all-locations request))
+  (GET "/location/:param" [param] (get-location-by-name-or-label param))
+  (GET "/images/:id" [id] (get-image id))
+  (GET "/images/:id/analyze" [id :as request] (get-image-analysis id)))
+
+(defroutes app-routes
+  (context "/api" []
+    (routes
+      public-routes
+      (wrap-auth protected-routes)))
+  (ANY "*" request
+    (println "Unmatched request:" (:uri request))
+    (status (response {:error "Route not found" :uri (:uri request)}) 404)))
+
 (def app
-  (-> (routes test-routes app-routes)
-;;      (wrap-log-json-body)
+  (-> (routes
+       test-routes
+       (defroutes auth-routes
+         (POST "/api/register" request (register-user request))
+         (POST "/api/login" request (login-user request)))
+       app-routes)
+      ;;      (wrap-log-json-body)
       (wrap-json-body {:keywords? true :malformed-response {:status 400 :body "Invalid JSON"}})
       wrap-params
-  ;;    wrap-debug
+      wrap-error-handling
+      (wrap-authentication jwt-secret)
+      (wrap-authorization auth-backend)
+      ;;      wrap-debug
       wrap-json-response
-      (wrap-cors :access-control-allow-origin [#".*"]
-                 :access-control-allow-methods [:get :post :patch :delete])))
+      ;; (wrap-cors :access-control-allow-origin [#".*"]
+      ;;            :access-control-allow-methods [:get :post :patch :delete])
+      ))
 (defn test-connection []
   (try
     (jdbc/execute-one! ds ["SELECT 1"])
