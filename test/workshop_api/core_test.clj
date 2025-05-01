@@ -83,6 +83,32 @@
       :else
       (throw (ex-info "At least one of item_id or image_id must be provided" {})))))
 
+;; Add this helper function to query location_images, similar to find-item-images
+(defn find-location-images
+  [ds criteria]
+  (let [{:keys [location_id image_id]} criteria]
+    (cond
+      (and location_id image_id)
+      (if (and (valid-uuid? location_id) (valid-uuid? image_id))
+        (jdbc/execute! ds
+                       ["SELECT * FROM location_images WHERE location_id = ?::uuid AND image_id = ?::uuid" location_id image_id]
+                       {:builder-fn rs/as-unqualified-lower-maps})
+        [])
+      location_id
+      (if (valid-uuid? location_id)
+        (jdbc/execute! ds
+                       ["SELECT * FROM location_images WHERE location_id = ?::uuid" location_id]
+                       {:builder-fn rs/as-unqualified-lower-maps})
+        [])
+      image_id
+      (if (valid-uuid? image_id)
+        (jdbc/execute! ds
+                       ["SELECT * FROM location_images WHERE image_id = ?::uuid" image_id]
+                       {:builder-fn rs/as-unqualified-lower-maps})
+        [])
+      :else
+      (throw (ex-info "At least one of location_id or image_id must be provided" {})))))
+
 (deftest test-add-location
   (testing "Adding a valid location"
     (let [location {:label "L1" :name "Tool Shed" :type "Shed" :area "Backyard" :description "Storage for tools"}
@@ -314,6 +340,102 @@
         (is (= 404 (:status response)) "Expected 404 status")
         (is (= "Item or image not found" (:error response-body)) "Expected error message")
         (is (empty? (find-item-images ds {:item_id item-id})) "Expected no item-image link in database")))))
+
+(deftest test-add-location-image
+  (testing "Adding a valid location-image link"
+    (let [location-id (generate-id)
+          location {:id location-id
+                    :label "L1"
+                    :name "Tool Shed"
+                    :type "Shed"
+                    :area "Backyard"
+                    :description "Storage for tools"
+                    :created_at (current-timestamp)
+                    :updated_at (current-timestamp)}
+          _ (db-add-location location)
+          image-id (generate-id)
+          image {:id image-id
+                 :image_data "base64-encoded-data"
+                 :mime_type "image/jpeg"
+                 :filename "test.jpg"
+                 :status "pending"
+                 :created_at (current-timestamp)
+                 :updated_at (current-timestamp)}
+          _ (db-add-image image)
+          location-image {:location_id location-id :image_id image-id}
+          request (-> (mock/request :post "/api/location-images")
+                      (mock/json-body location-image))
+          response (app request)]
+      (let [response-body (try (json/parse-string (:body response) true)
+                              (catch Exception e
+                                (println "Failed to parse response:" (.getMessage e))
+                                {}))
+            db-location-image (find-location-images ds {:location_id location-id :image_id image-id})]
+        (is (= 200 (:status response)) "Expected 200 status")
+        (is (= "success" (:status response-body)) "Expected success status in response")
+        (is (= location-id (:location_id response-body)) "Expected correct location_id in response")
+        (is (= image-id (:image_id response-body)) "Expected correct image_id in response")
+        (is (= 1 (count db-location-image)) "Expected one location-image link in database")
+        (is (= location-id (str (:location_id (first db-location-image)))) "Expected correct location_id in database")
+        (is (= image-id (str (:image_id (first db-location-image)))) "Expected correct image_id in database"))))
+
+  (testing "Adding location-image link with invalid UUIDs"
+    (let [location-image {:location_id "invalid-uuid" :image_id "invalid-uuid"}
+          request (-> (mock/request :post "/api/location-images")
+                      (mock/json-body location-image))
+          response (app request)]
+      (let [response-body (try (json/parse-string (:body response) true)
+                              (catch Exception e
+                                (println "Failed to parse response:" (.getMessage e))
+                                {}))]
+        (is (= 400 (:status response)) "Expected 400 status")
+        (is (= "Invalid UUID format" (:error response-body)) "Expected error message")
+        (is (empty? (find-location-images ds {:location_id "invalid-uuid"})) "Expected no location-image link in database"))))
+
+  (testing "Adding location-image link with non-existent location"
+    (let [image-id (generate-id)
+          image {:id image-id
+                 :image_data "base64-encoded-data"
+                 :mime_type "image/jpeg"
+                 :filename "test.jpg"
+                 :status "pending"
+                 :created_at (current-timestamp)
+                 :updated_at (current-timestamp)}
+          _ (db-add-image image)
+          location-image {:location_id "00000000-0000-0000-0000-000000000000" :image_id image-id}
+          request (-> (mock/request :post "/api/location-images")
+                      (mock/json-body location-image))
+          response (app request)]
+      (let [response-body (try (json/parse-string (:body response) true)
+                              (catch Exception e
+                                (println "Failed to parse response:" (.getMessage e))
+                                {}))]
+        (is (= 404 (:status response)) "Expected 404 status")
+        (is (= "Location or image not found" (:error response-body)) "Expected error message")
+        (is (empty? (find-location-images ds {:location_id "00000000-0000-0000-0000-000000000000"})) "Expected no location-image link in database"))))
+
+  (testing "Adding location-image link with non-existent image"
+    (let [location-id (generate-id)
+          location {:id location-id
+                    :label "L1"
+                    :name "Tool Shed"
+                    :type "Shed"
+                    :area "Backyard"
+                    :description "Storage for tools"
+                    :created_at (current-timestamp)
+                    :updated_at (current-timestamp)}
+          _ (db-add-location location)
+          location-image {:location_id location-id :image_id "00000000-0000-0000-0000-000000000000"}
+          request (-> (mock/request :post "/api/location-images")
+                      (mock/json-body location-image))
+          response (app request)]
+      (let [response-body (try (json/parse-string (:body response) true)
+                              (catch Exception e
+                                (println "Failed to parse response:" (.getMessage e))
+                                {}))]
+        (is (= 404 (:status response)) "Expected 404 status")
+        (is (= "Location or image not found" (:error response-body)) "Expected error message")
+        (is (empty? (find-location-images ds {:location_id location-id})) "Expected no location-image link in database")))))
 
 (defn wait-for-image-status [ds image-id expected-status timeout-ms]
   (let [start-time (System/currentTimeMillis)]
