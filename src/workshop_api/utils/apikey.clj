@@ -1,5 +1,5 @@
 (ns workshop-api.utils.apikey
-  (:genclass)
+  (:gen-class)
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]))
 
