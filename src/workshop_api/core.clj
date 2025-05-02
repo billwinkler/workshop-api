@@ -832,9 +832,8 @@
       (wrap-authorization auth-backend)
       ;;      wrap-debug
       wrap-json-response
-      ;; (wrap-cors :access-control-allow-origin [#".*"]
-      ;;            :access-control-allow-methods [:get :post :patch :delete])
-      ))
+      (wrap-cors :access-control-allow-origin [#".*"]
+                 :access-control-allow-methods [:get :post :patch :delete])))
 (defn test-connection []
   (try
     (jdbc/execute-one! ds ["SELECT 1"])
