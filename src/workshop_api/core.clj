@@ -615,6 +615,14 @@
     (response image)
     (status (response {:error "Image not found"}) 404)))
 
+(defn get-items-for-location [location-id]
+  (if (valid-uuid? location-id)
+    (if (db-get-location location-id)
+      (let [items (db-get-items-by-location location-id)]
+        (response (map #(assoc % :location_path (get-location-path (:location_id %))) items)))
+      (status (response {:error "Location not found" :location_id location-id}) 404))
+    (status (response {:error "Invalid location_id format" :location_id location-id}) 400)))
+
 (defn authenticate-user [username password]
   (if-let [user (db-get-user-by-username username)]
     (when (hashers/check password (:password_hash user))
@@ -808,6 +816,7 @@
 (defroutes public-routes
   (GET "/locations/hierarchy" request (get-location-hierarchy request))
   (GET "/locations/:id" [id] (get-location-details id))
+  (GET "/locations/:location_id/items" [location_id] (get-items-for-location location_id))
   (GET "/items/:id" [id] (get-item id))
   (GET "/search" request (search-inventory request))
   (GET "/items" request (get-all-items request))

@@ -897,6 +897,62 @@
            (is (= 401 (:status response)) "Expected 401 status")
            (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))))))
 
+
+(deftest test-get-items-for-location
+  (testing "Getting items for a valid location_id"
+    (let [location-id (generate-id)
+          location {:id location-id
+                    :label "L1"
+                    :name "Tool Shed"
+                    :type "Shed"
+                    :area "Backyard"
+                    :description "Storage for tools"
+                    :created_at (current-timestamp)
+                    :updated_at (current-timestamp)}
+          _ (db-add-location location)
+          item-id (generate-id)
+          item {:id item-id
+                :name "Screwdriver"
+                :description "Phillips head screwdriver"
+                :location_id location-id
+                :category "Tool"
+                :quantity 5
+                :created_at (current-timestamp)
+                :updated_at (current-timestamp)}
+          _ (db-add-item item)
+          request (mock/request :get (str "/api/locations/" location-id "/items"))
+          response (app request)
+          response-body (try (json/parse-string (:body response) true)
+                             (catch Exception e
+                               (println "Failed to parse response:" (.getMessage e))
+                               {}))]
+      (is (= 200 (:status response)) "Expected 200 status")
+      (is (= 1 (count response-body)) "Expected one item in response")
+      (is (= item-id (:id (first response-body))) "Expected correct item_id in response")
+      (is (= "Screwdriver" (:name (first response-body))) "Expected correct item name in response")
+      (is (= "Tool Shed" (:location_path (first response-body))) "Expected correct location path in response")))
+  (testing "Getting items for an invalid location_id"
+    (let [invalid-location-id "invalid-uuid"
+          request (mock/request :get (str "/api/locations/" invalid-location-id "/items"))
+          response (app request)
+          response-body (try (json/parse-string (:body response) true)
+                             (catch Exception e
+                               (println "Failed to parse response:" (.getMessage e))
+                               {}))]
+      (is (= 400 (:status response)) "Expected 400 status")
+      (is (= "Invalid location_id format" (:error response-body)) "Expected error message")))
+  (testing "Getting items for a non-existent location_id"
+    (let [non-existent-location-id "00000000-0000-0000-0000-000000000000"
+          request (mock/request :get (str "/api/locations/" non-existent-location-id "/items"))
+          response (app request)
+          response-body (try (json/parse-string (:body response) true)
+                            (catch Exception e
+                              (println "Failed to parse response:" (.getMessage e))
+                              {}))]
+      (is (= 404 (:status response)) "Expected 404 status")
+      (is (= "Location not found" (:error response-body)) "Expected error message"))) )
+
+
 (deftest test-malformed-json
   (testing "Handling malformed JSON"
     (let [request (-> (mock/request :post "/api/items")
