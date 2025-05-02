@@ -31,7 +31,7 @@
      :on-error (fn [request error]
                  (println "JWT validation error for request:" (:headers request))
                  (println "Error message:" (.getMessage error)))
-     :token-name "Bearer"})) ; Explicitly set token-name
+     :token-name "Bearer"}))
 
 (defn get-db-spec []
   (let [env (System/getenv "DB_ENV")]
@@ -54,7 +54,6 @@
                     (or (nil? (:label loc)) (string? (:label loc)))
                     (or (nil? (:description loc)) (string? (:description loc)))
                     (or (nil? (:parent_id loc)) (string? (:parent_id loc))))]
-;;    (println "Validating location:" loc "Result:" result)
     result))
 
 (defn valid-item? [item]
@@ -69,7 +68,6 @@
         notes-ok (or (nil? (:notes item)) (string? (:notes item)))
         acq-date-ok (or (nil? (:acquisition_date item)) (string? (:acquisition_date item)))
         result (and name-ok desc-ok loc-id-ok cat-ok sup-ok part-ok url-ok qty-ok notes-ok acq-date-ok)]
-;;    (println "Validating item:" item "Result:" result)
     result))
 
 (defn valid-partial-item? [item]
@@ -97,7 +95,6 @@
         (and (string? (:image_data image))
              (string? (:mime_type image))
              (or (nil? (:filename image)) (string? (:filename image))))]
-;;        (println "Validating image:" image "Result:" result)
         result))
 
 (defn valid-uuid? [s]
@@ -110,10 +107,7 @@
   (let [model-version (if (string? (:model_version config))
                         (keyword (:model_version config))
                         (:model_version config))]
-;;    (println "Validating config:" config)
     (println "Processed model_version:" model-version)
-;;    (println "model_version valid?" (or (nil? model-version) (keyword? model-version)))
-;;    (println "analysis_type valid?" (or (nil? (:analysis_type config)) (string? (:analysis_type config))))
     (and (or (nil? model-version) (keyword? model-version))
          (or (nil? (:analysis_type config)) (string? (:analysis_type config))))))
 
@@ -182,7 +176,6 @@
                       (:id image) (:image_data image) (:mime_type image) (:filename image) (:status image) (:created_at image) (:updated_at image)]
                      {:return-keys true}))
 
-;; added optional conn to support testing
 (defn db-update-image [id updates & [conn]]
   (let [ds (or conn ds)
         now (current-timestamp)
@@ -202,13 +195,12 @@
         (jdbc/execute-one! ds
                            (into [sql] params)
                            {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))))
-;; added optional conn to support testing
+
 (defn db-get-image [id & [conn]]
   (let [ds (or conn ds)]
     (let [image (jdbc/execute-one! ds
                                    ["SELECT * FROM images WHERE id = ?::uuid" id]
                                    {:builder-fn rs/as-unqualified-lower-maps})]
-;;      (println "db-get-image query for ID:" id "result:" image)
       (if image
         (update image :gemini_result
                 #(when % 
@@ -385,8 +377,6 @@
 
 (defn add-location [request]
   (let [loc (keywordize-keys (:body request))]
-;;    (println "add-location received body:" (:body request))
-;;    (println "add-location keywordized:" loc)
     (if (valid-location? loc)
       (let [new-loc (prepare-location loc)]
         (db-add-location new-loc)
@@ -414,10 +404,7 @@
     (status (response {:error "Location not found"}) 404)))
 
 (defn add-item [request]
-;;  (println "add-item raw request:" (dissoc request :body))
-;;  (println "add-item received body:" (:body request))
   (let [item (keywordize-keys (:body request))]
-;;    (println "add-item keywordized:" item)
     (if (map? (:body request))
       (if (valid-item? item)
         (try
@@ -531,10 +518,30 @@
       (status (response {:error "Location not found"}) 404))
     (status (response {:error "Invalid UUID format" :data {:location_id location-id :image_id image-id}}) 400)))
 
+(defn get-item-images [request]
+  (let [item-id (get-in request [:query-params "item_id"])
+        token (get-in request [:headers "authorization"])]
+    (println "get-item-images: item_id =" item-id ", token =" token)
+    (if (valid-uuid? item-id)
+      (let [images (db-get-item-images item-id)]
+        (if (seq images)
+          (response images)
+          (status (response {:error "No images found for item" :item_id item-id}) 404)))
+      (status (response {:error "Invalid item_id format" :item_id item-id}) 400))))
+
+(defn get-location-images [request]
+  (let [location-id (get-in request [:query-params "location_id"])
+        token (get-in request [:headers "authorization"])]
+    (println "get-location-images: location_id =" location-id ", token =" token)
+    (if (valid-uuid? location-id)
+      (let [images (db-get-location-images location-id)]
+        (if (seq images)
+          (response images)
+          (status (response {:error "No images found for location" :location_id location-id}) 404)))
+      (status (response {:error "Invalid location_id format" :location_id location-id}) 400))))
+
 (defn add-image [request]
   (let [image (keywordize-keys (:body request))]
-;;    (println "add-image received body:" (:body request))
-;;    (println "add-image keywordized:" image)
     (if (valid-image? image)
       (try
         (let [new-image (prepare-image image)]
@@ -549,7 +556,6 @@
   (println "Analyzing image with ID:" id)
   (println "Raw request body:" (:body request))
   (let [conn (or (:next.jdbc/connection request) ds)]
-;;    (println "Using database:" conn)
     (let [images (jdbc/execute! conn
                                 ["SELECT * FROM images"]
                                 {:builder-fn rs/as-unqualified-lower-maps})]
@@ -795,7 +801,9 @@
   (POST "/item-images" request (add-item-image request))
   (DELETE "/item-images/:item_id/:image_id" [item-id image-id] (delete-item-image item-id image-id))
   (POST "/location-images" request (add-location-image request))
-  (DELETE "/location-images/:location_id/:image_id" [location-id image-id] (delete-location-image location-id image-id)))
+  (DELETE "/location-images/:location_id/:image_id" [location-id image-id] (delete-location-image location-id image-id))
+  (GET "/item-images" request (get-item-images request))
+  (GET "/location-images" request (get-location-images request)))
 
 (defroutes public-routes
   (GET "/locations/hierarchy" request (get-location-hierarchy request))
@@ -824,16 +832,15 @@
          (POST "/api/register" request (register-user request))
          (POST "/api/login" request (login-user request)))
        app-routes)
-      ;;      (wrap-log-json-body)
       (wrap-json-body {:keywords? true :malformed-response {:status 400 :body "Invalid JSON"}})
       wrap-params
       wrap-error-handling
       (wrap-authentication auth-backend)
       (wrap-authorization auth-backend)
-      ;;      wrap-debug
       wrap-json-response
       (wrap-cors :access-control-allow-origin [#".*"]
                  :access-control-allow-methods [:get :post :patch :delete])))
+
 (defn test-connection []
   (try
     (jdbc/execute-one! ds ["SELECT 1"])

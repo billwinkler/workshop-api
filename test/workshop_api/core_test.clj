@@ -9,6 +9,7 @@
             [cheshire.core :as json]
             [workshop-api.core :refer [app ds generate-id current-timestamp db-add-location
                                        db-get-image db-add-item db-add-image db-add-user prepare-user
+                                       db-add-item-image db-add-location-image
                                        auth-backend]]
             [buddy.sign.jwt :as jwt]
             [buddy.hashers :as hashers]
@@ -665,6 +666,178 @@
           (= (:status db-image) expected-status) db-image
           (> (- (System/currentTimeMillis) start-time) timeout-ms) (throw (ex-info "Timeout waiting for image status" {:image-id image-id :expected-status expected-status}))
           :else (do (Thread/sleep 100) (recur)))))))
+
+(deftest test-get-item-images
+  (testing "Getting item images with valid item_id and JWT"
+    (let [user {:id (generate-id) :username "testuser"}
+          payload {:user_id (:id user) :username (:username user)
+                   :iat (quot (System/currentTimeMillis) 1000)
+                   :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+          token (jwt/sign payload jwt-secret {:alg :hs256})
+          location-id (generate-id)
+          location {:id location-id
+                    :label "L1"
+                    :name "Tool Shed"
+                    :type "Shed"
+                    :area "Backyard"
+                    :description "Storage for tools"
+                    :created_at (current-timestamp)
+                    :updated_at (current-timestamp)}
+          _ (db-add-location location)
+          item-id (generate-id)
+          item {:id item-id
+                :name "Screwdriver"
+                :description "Phillips head screwdriver"
+                :location_id location-id
+                :category "Tool"
+                :quantity 5
+                :created_at (current-timestamp)
+                :updated_at (current-timestamp)}
+          _ (db-add-item item)
+          image-id (generate-id)
+          image {:id image-id
+                 :image_data "base64-encoded-data"
+                 :mime_type "image/jpeg"
+                 :filename "test.jpg"
+                 :status "pending"
+                 :created_at (current-timestamp)
+                 :updated_at (current-timestamp)}
+          _ (db-add-image image)
+          _ (db-add-item-image item-id image-id)
+          request (-> (mock/request :get (str "/api/item-images?item_id=" item-id))
+                      (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+          response (app request)
+          response-body (try (json/parse-string (:body response) true)
+                             (catch Exception e
+                               (println "Failed to parse response:" (.getMessage e))
+                               {}))]
+      (is (= 200 (:status response)) "Expected 200 status")
+      (is (= 1 (count response-body)) "Expected one image in response")
+      (is (= image-id (:id (first response-body))) "Expected correct image_id in response")
+      (is (= "test.jpg" (:filename (first response-body))) "Expected correct filename in response")))
+  (testing "Getting item images without JWT"
+    (let [item-id (generate-id)
+          request (-> (mock/request :get (str "/api/item-images?item_id=" item-id)))
+          response (app request)
+          response-body (try (json/parse-string (:body response) true)
+                             (catch Exception e
+                               (println "Failed to parse response:" (.getMessage e))
+                               {}))]
+      (is (= 401 (:status response)) "Expected 401 status")
+      (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))
+  (testing "Getting item images with invalid item_id"
+    (let [user {:id (generate-id) :username "testuser"}
+          payload {:user_id (:id user) :username (:username user)
+                   :iat (quot (System/currentTimeMillis) 1000)
+                   :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+          token (jwt/sign payload jwt-secret {:alg :hs256})
+          invalid-item-id "invalid-uuid"
+          request (-> (mock/request :get (str "/api/item-images?item_id=" invalid-item-id))
+                      (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+          response (app request)
+          response-body (try (json/parse-string (:body response) true)
+                             (catch Exception e
+                               (println "Failed to parse response:" (.getMessage e))
+                               {}))]
+      (is (= 400 (:status response)) "Expected 400 status")
+      (is (= "Invalid item_id format" (:error response-body)) "Expected error message")))
+  (testing "Getting item images with non-existent item_id"
+    (let [user {:id (generate-id) :username "testuser"}
+          payload {:user_id (:id user) :username (:username user)
+                   :iat (quot (System/currentTimeMillis) 1000)
+                   :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+          token (jwt/sign payload jwt-secret {:alg :hs256})
+          non-existent-item-id "00000000-0000-0000-0000-000000000000"
+          request (-> (mock/request :get (str "/api/item-images?item_id=" non-existent-item-id))
+                      (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+          response (app request)
+          response-body (try (json/parse-string (:body response) true)
+                             (catch Exception e
+                               (println "Failed to parse response:" (.getMessage e))
+                               {}))]
+      (is (= 404 (:status response)) "Expected 404 status")
+      (is (= "No images found for item" (:error response-body)) "Expected error message"))))
+
+(deftest test-get-location-images
+  (testing "Getting location images with valid location_id and JWT"
+    (let [user {:id (generate-id) :username "testuser"}
+          payload {:user_id (:id user) :username (:username user)
+                   :iat (quot (System/currentTimeMillis) 1000)
+                   :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+          token (jwt/sign payload jwt-secret {:alg :hs256})
+          location-id (generate-id)
+          location {:id location-id
+                    :label "L1"
+                    :name "Tool Shed"
+                    :type "Shed"
+                    :area "Backyard"
+                    :description "Storage for tools"
+                    :created_at (current-timestamp)
+                    :updated_at (current-timestamp)}
+          _ (db-add-location location)
+          image-id (generate-id)
+          image {:id image-id
+                 :image_data "base64-encoded-data"
+                 :mime_type "image/jpeg"
+                 :filename "test.jpg"
+                 :status "pending"
+                 :created_at (current-timestamp)
+                 :updated_at (current-timestamp)}
+          _ (db-add-image image)
+          _ (db-add-location-image location-id image-id)
+          request (-> (mock/request :get (str "/api/location-images?location_id=" location-id))
+                      (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+          response (app request)
+          response-body (try (json/parse-string (:body response) true)
+                            (catch Exception e
+                              (println "Failed to parse response:" (.getMessage e))
+                              {}))]
+      (is (= 200 (:status response)) "Expected 200 status")
+      (is (= 1 (count response-body)) "Expected one image in response")
+      (is (= image-id (:id (first response-body))) "Expected correct image_id in response")
+      (is (= "test.jpg" (:filename (first response-body))) "Expected correct filename in response")))
+  (testing "Getting location images without JWT"
+    (let [location-id (generate-id)
+          request (-> (mock/request :get (str "/api/location-images?location_id=" location-id)))
+          response (app request)
+          response-body (try (json/parse-string (:body response) true)
+                            (catch Exception e
+                              (println "Failed to parse response:" (.getMessage e))
+                              {}))]
+      (is (= 401 (:status response)) "Expected 401 status")
+      (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))
+    (testing "Getting location images with invalid location_id"
+    (let [user {:id (generate-id) :username "testuser"}
+          payload {:user_id (:id user) :username (:username user)
+                   :iat (quot (System/currentTimeMillis) 1000)
+                   :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+          token (jwt/sign payload jwt-secret {:alg :hs256})
+          invalid-location-id "invalid-uuid"
+          request (-> (mock/request :get (str "/api/location-images?location_id=" invalid-location-id))
+                      (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+          response (app request)
+          response-body (try (json/parse-string (:body response) true)
+                            (catch Exception e
+                              (println "Failed to parse response:" (.getMessage e))
+                              {}))]
+      (is (= 400 (:status response)) "Expected 400 status")
+      (is (= "Invalid location_id format" (:error response-body)) "Expected error message")))
+    (testing "Getting location images with non-existent location_id"
+    (let [user {:id (generate-id) :username "testuser"}
+          payload {:user_id (:id user) :username (:username user)
+                   :iat (quot (System/currentTimeMillis) 1000)
+                   :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+          token (jwt/sign payload jwt-secret {:alg :hs256})
+          non-existent-location-id "00000000-0000-0000-0000-000000000000"
+          request (-> (mock/request :get (str "/api/location-images?location_id=" non-existent-location-id))
+                      (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+          response (app request)
+          response-body (try (json/parse-string (:body response) true)
+                            (catch Exception e
+                              (println "Failed to parse response:" (.getMessage e))
+                              {}))]
+      (is (= 404 (:status response)) "Expected 404 status")
+      (is (= "No images found for location" (:error response-body)) "Expected error message"))))
 
 (deftest test-analyze-image
   (testing "Analyzing an image with JWT"
