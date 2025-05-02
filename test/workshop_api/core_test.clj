@@ -766,9 +766,9 @@
         handler (fn [req] req) ; Return request to inspect identity
         app (buddy.auth.middleware/wrap-authentication handler auth-backend)
         response (app request)]
-    (println "jws-backend minimal test, token:" token)
-    (println "jws-backend minimal test, request headers:" (:headers request))
-    (println "jws-backend minimal test, identity:" (:identity response))
+;;    (println "jws-backend minimal test, token:" token)
+;;    (println "jws-backend minimal test, request headers:" (:headers request))
+;;    (println "jws-backend minimal test, identity:" (:identity response))
     (is (some? (:identity response)) "Expected auth data to be parsed")
     (is (= (:id user) (get-in response [:identity :user_id])) "Expected correct user_id")
     (is (= "testuser" (get-in response [:identity :username])) "Expected correct username")))
@@ -781,9 +781,9 @@
         token (jwt/sign payload jwt-secret {:alg :hs256})
         request {:headers {"Authorization" (str "Bearer " token)}}
         authenticated-request ((buddy.auth.middleware/wrap-authentication identity auth-backend) request)]
-    (println "jws-backend test, token:" token)
-    (println "jws-backend test, request headers:" (:headers request))
-    (println "jws-backend test, identity:" (:identity authenticated-request))
+;;    (println "jws-backend test, token:" token)
+;;    (println "jws-backend test, request headers:" (:headers request))
+;;    (println "jws-backend test, identity:" (:identity authenticated-request))
     (is (some? (:identity authenticated-request)) "Expected auth data to be parsed")
     (is (= (:id user) (get-in authenticated-request [:identity :user_id])) "Expected correct user_id")
     (is (= "testuser" (get-in authenticated-request [:identity :username])) "Expected correct username")))
@@ -858,9 +858,9 @@
                    :iat (quot (System/currentTimeMillis) 1000)
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
-          _ (println "Generated token:" token)
+;;          _ (println "Generated token:" token)
           decoded (jwt/unsign token jwt-secret {:alg :hs256})
-          _ (println "Decoded token:" decoded)
+;;          _ (println "Decoded token:" decoded)
           location {:label "L1" :name "Tool Shed" :type "Shed" :area "Backyard" :description "Storage for tools"}
           request (-> (mock/request :post "/api/locations")
                       (mock/json-body location)
@@ -871,7 +871,7 @@
                           (catch Exception e
                             (println "Failed to parse response body:" (.getMessage e))
                             {}))]
-      (println "Valid JWT response:" response)
+;;      (println "Valid JWT response:" response)
       (is (= 200 (:status response)) "Expected 200 status")
       (is (= "Tool Shed" (:name response-body)) "Expected correct location name")
       (is (str/starts-with? (get-in response [:headers "Content-Type"]) "application/json") "Expected JSON content type")))
@@ -886,7 +886,7 @@
                           (catch Exception e
                             (println "Failed to parse response body:" (.getMessage e))
                             {}))]
-      (println "No JWT response body:" (:body response))
+;;      (println "No JWT response body:" (:body response))
       (is (= 401 (:status response)) "Expected 401 status")
       (is (= "Unauthorized" (:message response-body)) "Expected error message")
       (is (str/starts-with? (get-in response [:headers "Content-Type"]) "application/json") "Expected JSON content type")))
@@ -902,7 +902,7 @@
                           (catch Exception e
                             (println "Failed to parse response body:" (.getMessage e))
                             {}))]
-      (println "Invalid JWT response body:" (:body response))
+;;      (println "Invalid JWT response body:" (:body response))
       (is (= 401 (:status response)) "Expected 401 status")
       (is (= "Unauthorized" (:message response-body)) "Expected error message")
       (is (str/starts-with? (get-in response [:headers "Content-Type"]) "application/json") "Expected JSON content type"))))

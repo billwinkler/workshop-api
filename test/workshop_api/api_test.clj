@@ -34,7 +34,7 @@
                                 :as :json
                                 :throw-exceptions false
                                 :headers {"Content-Type" "application/json"}})]
-        (println "Raw response for" url ":" response)
+;;        (println "Raw response for" url ":" response)
         (let [body (if (string? (:body response))
                      (json/parse-string (:body response) true)
                      (:body response))]
@@ -73,6 +73,6 @@
   (testing "GET /api/images/:id with non-existent image"
     (let [non-existent-id (generate-id)
           response (get-image-by-id non-existent-id)]
-      (println "Response for non-existent ID" non-existent-id ":" response)
+;;      (println "Response for non-existent ID" non-existent-id ":" response)
       (is (= 404 (:status response)) "Expected 404 status")
       (is (= "Image not found" (:error (:body response))) "Expected error message"))))

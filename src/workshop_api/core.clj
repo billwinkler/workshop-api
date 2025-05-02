@@ -30,9 +30,7 @@
      :options {:alg :hs256}
      :on-error (fn [request error]
                  (println "JWT validation error for request:" (:headers request))
-                 (println "Error message:" (.getMessage error))
-                 (println "Error details:" error)
-                 (println "Stacktrace:" (.getStackTrace error)))
+                 (println "Error message:" (.getMessage error)))
      :token-name "Bearer"})) ; Explicitly set token-name
 
 (defn get-db-spec []
@@ -112,10 +110,10 @@
   (let [model-version (if (string? (:model_version config))
                         (keyword (:model_version config))
                         (:model_version config))]
-    (println "Validating config:" config)
+;;    (println "Validating config:" config)
     (println "Processed model_version:" model-version)
-    (println "model_version valid?" (or (nil? model-version) (keyword? model-version)))
-    (println "analysis_type valid?" (or (nil? (:analysis_type config)) (string? (:analysis_type config))))
+;;    (println "model_version valid?" (or (nil? model-version) (keyword? model-version)))
+;;    (println "analysis_type valid?" (or (nil? (:analysis_type config)) (string? (:analysis_type config))))
     (and (or (nil? model-version) (keyword? model-version))
          (or (nil? (:analysis_type config)) (string? (:analysis_type config))))))
 
