@@ -22,8 +22,8 @@
   (:import [java.sql Timestamp]
            [java.time Instant]))
 
-;;(def jwt-secret (or (System/getenv "JWT_SECRET") "your-secure-secret-here"))
-(def jwt-secret "justkidding")
+(def jwt-secret (or (System/getenv "JWT_SECRET") "your-secure-secret-here"))
+
 (def auth-backend
   (jws-backend
     {:secret jwt-secret

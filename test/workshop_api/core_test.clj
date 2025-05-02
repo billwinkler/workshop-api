@@ -15,7 +15,7 @@
             [buddy.auth.middleware :refer [wrap-authentication]]
             [clojure.string :as str]))
 
-(def jwt-secret "justkidding") ; Simplified to single definition, removed redundant (or ...) version
+(def jwt-secret (or (System/getenv "JWT_SECRET") "your-secure-secret-here"))
 
 ;; Mock gemini/call-gemini-api to avoid external calls
 (defn mock-gemini-api [image-data model-version analysis-type]
@@ -655,6 +655,17 @@
         (is (= "Location or image not found" (:error response-body)) "Expected error message")
         (is (empty? (find-location-images ds {:location_id location-id})) "Expected no location-image link in database")))))
 
+(defn wait-for-image-status [ds image-id expected-status timeout-ms]
+  (let [start-time (System/currentTimeMillis)]
+    (loop []
+      (let [db-image (jdbc/execute-one! ds
+                                        ["SELECT * FROM images WHERE id = ?::uuid" image-id]
+                                        {:builder-fn rs/as-unqualified-lower-maps})]
+        (cond
+          (= (:status db-image) expected-status) db-image
+          (> (- (System/currentTimeMillis) start-time) timeout-ms) (throw (ex-info "Timeout waiting for image status" {:image-id image-id :expected-status expected-status}))
+          :else (do (Thread/sleep 100) (recur)))))))
+
 (deftest test-analyze-image
   (testing "Analyzing an image with JWT"
     (db-fixture
@@ -707,9 +718,9 @@
                request (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
                response (app (assoc request :next.jdbc/connection tx))
                response-body (try (json/parse-string (:body response) true)
-                                 (catch Exception e
-                                   (println "Failed to parse response:" (.getMessage e))
-                                   {}))]
+                                  (catch Exception e
+                                    (println "Failed to parse response:" (.getMessage e))
+                                    {}))]
            (is (= 401 (:status response)) "Expected 401 status")
            (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))))))
 
