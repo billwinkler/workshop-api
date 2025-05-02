@@ -1,6 +1,7 @@
 (ns workshop-api.utils.apikey
-     (:require [clojure.edn :as edn]
-               [clojure.java.io :as io]))
+  (:genclass)
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]))
 
    (def api-keys
      (edn/read-string (slurp (io/resource "apikey.edn"))))
