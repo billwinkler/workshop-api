@@ -9,8 +9,8 @@
             [cheshire.core :as json]
             [workshop-api.core :refer [app ds generate-id current-timestamp db-add-location
                                        db-get-image db-add-item db-add-image db-add-user prepare-user
-                                       db-add-item-image db-add-location-image
-                                       auth-backend]]
+                                       db-add-item-image db-add-location-image 
+                                       db-get-image-analyses auth-backend]]
             [buddy.sign.jwt :as jwt]
             [buddy.hashers :as hashers]
             [buddy.auth.middleware :refer [wrap-authentication]]
@@ -20,21 +20,29 @@
 
 ;; Mock gemini/call-gemini-api to avoid external calls
 (defn mock-gemini-api [image-data model-version analysis-type]
-  (let [model-str (if (keyword? model-version)
+  (let [start-time (System/currentTimeMillis)
+        model-str (if (keyword? model-version)
                     (name model-version)
-                    (str model-version))]
-    {:mock_result (str "Analyzed " image-data " with " model-str " and " analysis-type)}))
+                    (str model-version))
+        result {:mock_result (str "Analyzed " image-data " with " model-str " and " analysis-type)}
+        end-time (System/currentTimeMillis)]
+    (println "mock-gemini-api executed in" (- end-time start-time) "ms")
+    result))
 
 ;; Verify database schema
 (defn verify-schema [ds]
-  (let [result (jdbc/execute-one! ds
-                                  ["SELECT EXISTS (
-                                     SELECT FROM information_schema.tables
-                                     WHERE table_name = 'locations') AS table_exists"]
-                                  {:builder-fn rs/as-unqualified-lower-maps})]
-    (if (:table_exists result)
-      (println "Locations table exists")
-      (throw (ex-info "Locations table does not exist" {})))))
+  (let [tables [:locations :images :items :item_images :location_images :users :image_analyses]
+        results (map (fn [table]
+                       (jdbc/execute-one! ds
+                                          [(str "SELECT EXISTS (
+                                                 SELECT FROM information_schema.tables
+                                                 WHERE table_name = ?)") (name table)]
+                                          {:builder-fn rs/as-unqualified-lower-maps}))
+                     tables)]
+    (doseq [[table result] (map vector tables results)]
+      (if (:exists result)
+        (println (str (name table) " table exists"))
+        (throw (ex-info (str (name table) " table does not exist") {}))))))
 
 ;; Fixture to set up and tear down the test database
 (defn db-fixture [f]
@@ -46,7 +54,7 @@
   (with-redefs [workshop-api.gemini-describe/call-gemini-api mock-gemini-api]
     (f))
   (try
-    (jdbc/execute! ds ["TRUNCATE TABLE item_images, location_images, items, images, locations, users RESTART IDENTITY"])
+    (jdbc/execute! ds ["TRUNCATE TABLE item_images, location_images, items, images, image_analyses, locations, users RESTART IDENTITY"])
     (catch Exception e
       (println "Failed to truncate tables:" (.getMessage e)))))
 
@@ -311,10 +319,10 @@
         (is (or (nil? (:id response-body))
                 (uuid? (java.util.UUID/fromString (:id response-body))))
             "Expected valid UUID in response")
-        (is (= "pending" (:status response-body)) "Expected pending status in response")
+        (is (nil? (:status response-body)) "Expected no status in response")
         (is (= 1 (count db-image)) "Expected one image in database")
         (is (= "test.jpg" (:filename (first db-image))) "Expected correct filename in database")
-        (is (= "pending" (:status (first db-image))) "Expected pending status in database"))))
+        (is (nil? (:status (first db-image))) "Expected no status in database"))))
   (testing "Adding a valid image without JWT"
     (let [image {:image_data "base64-encoded-data"
                  :mime_type "image/jpeg"
@@ -391,7 +399,6 @@
                  :image_data "base64-encoded-data"
                  :mime_type "image/jpeg"
                  :filename "test.jpg"
-                 :status "pending"
                  :created_at (current-timestamp)
                  :updated_at (current-timestamp)}
           _ (db-add-image image)
@@ -438,7 +445,6 @@
                  :image_data "base64-encoded-data"
                  :mime_type "image/jpeg"
                  :filename "test.jpg"
-                 :status "pending"
                  :created_at (current-timestamp)
                  :updated_at (current-timestamp)}
           _ (db-add-image image)
@@ -481,7 +487,6 @@
                  :image_data "base64-encoded-data"
                  :mime_type "image/jpeg"
                  :filename "test.jpg"
-                 :status "pending"
                  :created_at (current-timestamp)
                  :updated_at (current-timestamp)}
           _ (db-add-image image)
@@ -558,7 +563,6 @@
                  :image_data "base64-encoded-data"
                  :mime_type "image/jpeg"
                  :filename "test.jpg"
-                 :status "pending"
                  :created_at (current-timestamp)
                  :updated_at (current-timestamp)}
           _ (db-add-image image)
@@ -579,7 +583,6 @@
         (is (= 1 (count db-location-image)) "Expected one location-image link in database")
         (is (= location-id (str (:location_id (first db-location-image)))) "Expected correct location_id in database")
         (is (= image-id (str (:image_id (first db-location-image)))) "Expected correct image_id in database"))))
-
   (testing "Adding location-image link with invalid UUIDs"
     (let [user {:id (generate-id) :username "testuser"}
           payload {:user_id (:id user) :username (:username user)
@@ -598,7 +601,6 @@
         (is (= 400 (:status response)) "Expected 400 status")
         (is (= "Invalid UUID format" (:error response-body)) "Expected error message")
         (is (empty? (find-location-images ds {:location_id "invalid-uuid"})) "Expected no location-image link in database"))))
-
   (testing "Adding location-image link with non-existent location"
     (let [user {:id (generate-id) :username "testuser"}
           payload {:user_id (:id user) :username (:username user)
@@ -610,7 +612,6 @@
                  :image_data "base64-encoded-data"
                  :mime_type "image/jpeg"
                  :filename "test.jpg"
-                 :status "pending"
                  :created_at (current-timestamp)
                  :updated_at (current-timestamp)}
           _ (db-add-image image)
@@ -626,7 +627,6 @@
         (is (= 404 (:status response)) "Expected 404 status")
         (is (= "Location or image not found" (:error response-body)) "Expected error message")
         (is (empty? (find-location-images ds {:location_id "00000000-0000-0000-0000-000000000000"})) "Expected no location-image link in database"))))
-
   (testing "Adding location-image link with non-existent image"
     (let [user {:id (generate-id) :username "testuser"}
           payload {:user_id (:id user) :username (:username user)
@@ -656,15 +656,13 @@
         (is (= "Location or image not found" (:error response-body)) "Expected error message")
         (is (empty? (find-location-images ds {:location_id location-id})) "Expected no location-image link in database")))))
 
-(defn wait-for-image-status [ds image-id expected-status timeout-ms]
+(defn wait-for-image-status [ds analysis-id expected-status timeout-ms]
   (let [start-time (System/currentTimeMillis)]
     (loop []
-      (let [db-image (jdbc/execute-one! ds
-                                        ["SELECT * FROM images WHERE id = ?::uuid" image-id]
-                                        {:builder-fn rs/as-unqualified-lower-maps})]
+      (let [db-analysis (db-get-image-analyses analysis-id)]
         (cond
-          (= (:status db-image) expected-status) db-image
-          (> (- (System/currentTimeMillis) start-time) timeout-ms) (throw (ex-info "Timeout waiting for image status" {:image-id image-id :expected-status expected-status}))
+          (= (:status db-analysis) expected-status) db-analysis
+          (> (- (System/currentTimeMillis) start-time) timeout-ms) (throw (ex-info "Timeout waiting for image analysis status" {:analysis-id analysis-id :expected-status expected-status}))
           :else (do (Thread/sleep 100) (recur)))))))
 
 (deftest test-get-item-images
@@ -699,7 +697,6 @@
                  :image_data "base64-encoded-data"
                  :mime_type "image/jpeg"
                  :filename "test.jpg"
-                 :status "pending"
                  :created_at (current-timestamp)
                  :updated_at (current-timestamp)}
           _ (db-add-image image)
@@ -780,7 +777,6 @@
                  :image_data "base64-encoded-data"
                  :mime_type "image/jpeg"
                  :filename "test.jpg"
-                 :status "pending"
                  :created_at (current-timestamp)
                  :updated_at (current-timestamp)}
           _ (db-add-image image)
@@ -806,7 +802,7 @@
                               {}))]
       (is (= 401 (:status response)) "Expected 401 status")
       (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))
-    (testing "Getting location images with invalid location_id"
+  (testing "Getting location images with invalid location_id"
     (let [user {:id (generate-id) :username "testuser"}
           payload {:user_id (:id user) :username (:username user)
                    :iat (quot (System/currentTimeMillis) 1000)
@@ -822,7 +818,7 @@
                               {}))]
       (is (= 400 (:status response)) "Expected 400 status")
       (is (= "Invalid location_id format" (:error response-body)) "Expected error message")))
-    (testing "Getting location images with non-existent location_id"
+  (testing "Getting location images with non-existent location_id"
     (let [user {:id (generate-id) :username "testuser"}
           payload {:user_id (:id user) :username (:username user)
                    :iat (quot (System/currentTimeMillis) 1000)
@@ -840,49 +836,16 @@
       (is (= "No images found for location" (:error response-body)) "Expected error message"))))
 
 (deftest test-analyze-image
-  (testing "Analyzing an image with JWT"
-    (db-fixture
-     (fn []
-       (jdbc/with-transaction [tx ds]
-         (let [user {:id (generate-id) :username "testuser"}
-               payload {:user_id (:id user) :username (:username user)
-                        :iat (quot (System/currentTimeMillis) 1000)
-                        :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
-               token (jwt/sign payload jwt-secret {:alg :hs256})
-               image-id (generate-id)
-               insert-result (jdbc/execute-one! tx
-                                                ["INSERT INTO images (id, image_data, mime_type, status, created_at, updated_at)
-                                                 VALUES (?::uuid, ?, ?, ?, ?, ?)"
-                                                 image-id "data" "image/jpeg" "pending" (current-timestamp) (current-timestamp)]
-                                                {:builder-fn rs/as-unqualified-lower-maps :return-keys true})
-               image-from-db (db-get-image image-id tx)
-               request (-> (mock/request :post (str "/api/images/" image-id "/analyze"))
-                           (mock/json-body {:model_version "latest" :analysis_type "Image analysis"})
-                           (assoc-in [:headers "Authorization"] (str "Bearer " token)))
-               body-str (slurp (:body request))
-               request (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
-               response (app (assoc request :next.jdbc/connection tx))
-               response-body (json/parse-string (:body response) true)]
-           (is (= 200 (:status response)) "Expected 200 status")
-           (is (= "analysis_started" (:status response-body)) "Expected analysis started status")
-           (let [db-image (wait-for-image-status tx image-id "completed" 5000)
-                 gemini-result (if (instance? org.postgresql.util.PGobject (:gemini_result db-image))
-                                 (json/parse-string (.getValue (:gemini_result db-image)) true)
-                                 (:gemini_result db-image))]
-             (println "Processed gemini_result:" gemini-result)
-             (is (= "completed" (:status db-image)) "Expected completed status")
-             (is (map? gemini-result) "Expected gemini_result to be a map")
-             (is (= {:mock_result "Analyzed data with latest and Image analysis"} gemini-result)
-                 "Expected correct Gemini result")))))))
+  
   (testing "Analyzing an image without JWT"
     (db-fixture
      (fn []
        (jdbc/with-transaction [tx ds]
          (let [image-id (generate-id)
                insert-result (jdbc/execute-one! tx
-                                                ["INSERT INTO images (id, image_data, mime_type, status, created_at, updated_at)
-                                                 VALUES (?::uuid, ?, ?, ?, ?, ?)"
-                                                 image-id "data" "image/jpeg" "pending" (current-timestamp) (current-timestamp)]
+                                                ["INSERT INTO images (id, image_data, mime_type, created_at, updated_at)
+                                                  VALUES (?::uuid, ?, ?, ?, ?)"
+                                                 image-id "data" "image/jpeg" (current-timestamp) (current-timestamp)]
                                                 {:builder-fn rs/as-unqualified-lower-maps :return-keys true})
                image-from-db (db-get-image image-id tx)
                request (-> (mock/request :post (str "/api/images/" image-id "/analyze"))
@@ -895,8 +858,120 @@
                                     (println "Failed to parse response:" (.getMessage e))
                                     {}))]
            (is (= 401 (:status response)) "Expected 401 status")
-           (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))))))
+           (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message"))))))
+  (testing "Analyzing a non-existent image with JWT"
+    (db-fixture
+     (fn []
+       (jdbc/with-transaction [tx ds]
+         (let [user {:id (generate-id) :username "testuser"}
+               payload {:user_id (:id user) :username (:username user)
+                        :iat (quot (System/currentTimeMillis) 1000)
+                        :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+               token (jwt/sign payload jwt-secret {:alg :hs256})
+               image-id "00000000-0000-0000-0000-000000000000"
+               request (-> (mock/request :post (str "/api/images/" image-id "/analyze"))
+                           (mock/json-body {:model_version "latest" :analysis_type "Image analysis"})
+                           (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+               body-str (slurp (:body request))
+               request (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
+               response (app (assoc request :next.jdbc/connection tx))
+               response-body (try (json/parse-string (:body response) true)
+                                  (catch Exception e
+                                    (println "Failed to parse response:" (.getMessage e))
+                                    {}))]
+           (is (= 404 (:status response)) "Expected 404 status")
+           (is (= "Image not found" (:error response-body)) "Expected error message"))))))
+  (testing "Analyzing an image with invalid UUID"
+    (db-fixture
+     (fn []
+       (jdbc/with-transaction [tx ds]
+         (let [user {:id (generate-id) :username "testuser"}
+               payload {:user_id (:id user) :username (:username user)
+                        :iat (quot (System/currentTimeMillis) 1000)
+                        :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+               token (jwt/sign payload jwt-secret {:alg :hs256})
+               image-id "invalid-uuid"
+               request (-> (mock/request :post (str "/api/images/" image-id "/analyze"))
+                           (mock/json-body {:model_version "latest" :analysis_type "Image analysis"})
+                           (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+               body-str (slurp (:body request))
+               request (assoc request :body (java.io.ByteArrayInputStream. (.getBytes body-str)))
+               response (app (assoc request :next.jdbc/connection tx))
+               response-body (try (json/parse-string (:body response) true)
+                                  (catch Exception e
+                                    (println "Failed to parse response:" (.getMessage e))
+                                    {}))]
+           (is (= 400 (:status response)) "Expected 400 status")
+           (is (= "Invalid UUID format" (:error response-body)) "Expected error message"))))))
 
+(deftest test-get-image-analysis
+  (testing "Getting image analysis with valid analysis_id"
+    (db-fixture
+     (fn []
+       (jdbc/with-transaction [tx ds]
+         (let [user {:id (generate-id) :username "testuser"}
+               payload {:user_id (:id user) :username (:username user)
+                        :iat (quot (System/currentTimeMillis) 1000)
+                        :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+               token (jwt/sign payload jwt-secret {:alg :hs256})
+               image-id (generate-id)
+               _ (jdbc/execute-one! tx
+                                    ["INSERT INTO images (id, image_data, mime_type, created_at, updated_at)
+                                      VALUES (?::uuid, ?, ?, ?, ?)"
+                                     image-id "data" "image/jpeg" (current-timestamp) (current-timestamp)]
+                                    {:builder-fn rs/as-unqualified-lower-maps})
+               analysis-id (generate-id)
+               _ (jdbc/execute-one! tx
+                                    ["INSERT INTO image_analyses (id, image_id, status, model_version, analysis_type, result, created_at, updated_at)
+                                      VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::jsonb, ?, ?)"
+                                     analysis-id image-id "completed" "latest" "Image analysis"
+                                     (json/generate-string {:mock_result "Analyzed data with latest and Image analysis"})
+                                     (current-timestamp) (current-timestamp)]
+                                    {:builder-fn rs/as-unqualified-lower-maps})
+               request (-> (mock/request :get (str "/api/images/" analysis-id "/analyze"))
+                           (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+               response (app (assoc request :next.jdbc/connection tx))
+               response-body (json/parse-string (:body response) true)]
+           (is (= 200 (:status response)) "Expected 200 status")
+           (is (= "completed" (:status response-body)) "Expected completed status")
+           (is (= analysis-id (:analysis_id response-body)) "Expected correct analysis_id")
+           (is (= image-id (:image_id response-body)) "Expected correct image_id")
+           (is (= "latest" (:model_version response-body)) "Expected correct model_version")
+           (is (= "Image analysis" (:analysis_type response-body)) "Expected correct analysis_type")
+           (is (= {:mock_result "Analyzed data with latest and Image analysis"} (:result response-body))
+               "Expected correct result"))))))
+    (testing "Getting image analysis with non-existent analysis_id"
+    (db-fixture
+     (fn []
+       (jdbc/with-transaction [tx ds]
+         (let [user {:id (generate-id) :username "testuser"}
+               payload {:user_id (:id user) :username (:username user)
+                        :iat (quot (System/currentTimeMillis) 1000)
+                        :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+               token (jwt/sign payload jwt-secret {:alg :hs256})
+               analysis-id "00000000-0000-0000-0000-000000000000"
+               request (-> (mock/request :get (str "/api/images/" analysis-id "/analyze"))
+                           (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+               response (app (assoc request :next.jdbc/connection tx))
+               response-body (json/parse-string (:body response) true)]
+           (is (= 404 (:status response)) "Expected 404 status")
+           (is (= "Image analysis not found" (:error response-body)) "Expected error message"))))))
+  (testing "Getting image analysis with invalid UUID"
+    (db-fixture
+     (fn []
+       (jdbc/with-transaction [tx ds]
+         (let [user {:id (generate-id) :username "testuser"}
+               payload {:user_id (:id user) :username (:username user)
+                        :iat (quot (System/currentTimeMillis) 1000)
+                        :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+               token (jwt/sign payload jwt-secret {:alg :hs256})
+               analysis-id "invalid-uuid"
+               request (-> (mock/request :get (str "/api/images/" analysis-id "/analyze"))
+                           (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+               response (app (assoc request :next.jdbc/connection tx))
+               response-body (json/parse-string (:body response) true)]
+           (is (= 400 (:status response)) "Expected 400 status")
+           (is (= "Invalid UUID format" (:error response-body)) "Expected error message"))))))))
 
 (deftest test-get-items-for-location
   (testing "Getting items for a valid location_id"
@@ -950,8 +1025,7 @@
                               (println "Failed to parse response:" (.getMessage e))
                               {}))]
       (is (= 404 (:status response)) "Expected 404 status")
-      (is (= "Location not found" (:error response-body)) "Expected error message"))) )
-
+      (is (= "Location not found" (:error response-body)) "Expected error message"))))
 
 (deftest test-malformed-json
   (testing "Handling malformed JSON"
@@ -995,9 +1069,6 @@
         handler (fn [req] req) ; Return request to inspect identity
         app (buddy.auth.middleware/wrap-authentication handler auth-backend)
         response (app request)]
-;;    (println "jws-backend minimal test, token:" token)
-;;    (println "jws-backend minimal test, request headers:" (:headers request))
-;;    (println "jws-backend minimal test, identity:" (:identity response))
     (is (some? (:identity response)) "Expected auth data to be parsed")
     (is (= (:id user) (get-in response [:identity :user_id])) "Expected correct user_id")
     (is (= "testuser" (get-in response [:identity :username])) "Expected correct username")))
@@ -1010,9 +1081,6 @@
         token (jwt/sign payload jwt-secret {:alg :hs256})
         request {:headers {"Authorization" (str "Bearer " token)}}
         authenticated-request ((buddy.auth.middleware/wrap-authentication identity auth-backend) request)]
-;;    (println "jws-backend test, token:" token)
-;;    (println "jws-backend test, request headers:" (:headers request))
-;;    (println "jws-backend test, identity:" (:identity authenticated-request))
     (is (some? (:identity authenticated-request)) "Expected auth data to be parsed")
     (is (= (:id user) (get-in authenticated-request [:identity :user_id])) "Expected correct user_id")
     (is (= "testuser" (get-in authenticated-request [:identity :username])) "Expected correct username")))
@@ -1031,7 +1099,6 @@
       (is (= 1 (count db-user)) "Expected one user in database")
       (is (= "testuser" (:username (first db-user))) "Expected correct username in database")
       (is (hashers/check "securepassword123" (:password_hash (first db-user))) "Expected correct password hash")))
-
   (testing "Registering with existing username"
     (let [user {:username "testuser" :password "securepassword123"}
           request (-> (mock/request :post "/api/register")
@@ -1040,7 +1107,6 @@
           response-body (json/parse-string (:body response) true)]
       (is (= 400 (:status response)) "Expected 400 status")
       (is (= "Username already exists" (:error response-body)) "Expected error message")))
-
   (testing "Registering with invalid user data"
     (let [user {:username "ab" :password "short"}
           request (-> (mock/request :post "/api/register")
@@ -1061,7 +1127,6 @@
       (is (= 200 (:status response)) "Expected 200 status")
       (is (= "testuser" (:username (:user response-body))) "Expected correct username in response")
       (is (string? (:token response-body)) "Expected JWT token in response")))
-
   (testing "Logging in with invalid credentials"
     (let [user {:username "testuser" :password "wrongpassword"}
           request (-> (mock/request :post "/api/login")
@@ -1070,7 +1135,6 @@
           response-body (json/parse-string (:body response) true)]
       (is (= 401 (:status response)) "Expected 401 status")
       (is (= "Invalid credentials" (:error response-body)) "Expected error message")))
-
   (testing "Logging in with missing credentials"
     (let [user {:username "testuser"}
           request (-> (mock/request :post "/api/login")
@@ -1087,9 +1151,6 @@
                    :iat (quot (System/currentTimeMillis) 1000)
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
-;;          _ (println "Generated token:" token)
-          decoded (jwt/unsign token jwt-secret {:alg :hs256})
-;;          _ (println "Decoded token:" decoded)
           location {:label "L1" :name "Tool Shed" :type "Shed" :area "Backyard" :description "Storage for tools"}
           request (-> (mock/request :post "/api/locations")
                       (mock/json-body location)
@@ -1100,11 +1161,9 @@
                           (catch Exception e
                             (println "Failed to parse response body:" (.getMessage e))
                             {}))]
-;;      (println "Valid JWT response:" response)
       (is (= 200 (:status response)) "Expected 200 status")
       (is (= "Tool Shed" (:name response-body)) "Expected correct location name")
       (is (str/starts-with? (get-in response [:headers "Content-Type"]) "application/json") "Expected JSON content type")))
-
   (testing "Accessing protected route without JWT"
     (let [location {:label "L1" :name "Tool Shed" :type "Shed" :area "Backyard" :description "Storage for tools"}
           request (-> (mock/request :post "/api/locations")
@@ -1115,11 +1174,9 @@
                           (catch Exception e
                             (println "Failed to parse response body:" (.getMessage e))
                             {}))]
-;;      (println "No JWT response body:" (:body response))
       (is (= 401 (:status response)) "Expected 401 status")
       (is (= "Unauthorized" (:message response-body)) "Expected error message")
       (is (str/starts-with? (get-in response [:headers "Content-Type"]) "application/json") "Expected JSON content type")))
-
   (testing "Accessing protected route with invalid JWT"
     (let [location {:label "L1" :name "Tool Shed" :type "Shed" :area "Backyard" :description "Storage for tools"}
           request (-> (mock/request :post "/api/locations")
@@ -1131,7 +1188,6 @@
                           (catch Exception e
                             (println "Failed to parse response body:" (.getMessage e))
                             {}))]
-;;      (println "Invalid JWT response body:" (:body response))
       (is (= 401 (:status response)) "Expected 401 status")
       (is (= "Unauthorized" (:message response-body)) "Expected error message")
       (is (str/starts-with? (get-in response [:headers "Content-Type"]) "application/json") "Expected JSON content type"))))

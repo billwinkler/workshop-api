@@ -136,9 +136,18 @@
   (let [now (current-timestamp)]
     (-> image
         (assoc :id (generate-id))
-        (assoc :status "pending")
         (assoc :created_at now)
         (assoc :updated_at now))))
+
+(defn prepare-image-analysis [image_id config]
+  (let [now (current-timestamp)]
+    {:id (generate-id)
+     :image_id image_id
+     :status "pending"
+     :model_version (or (:model_version config) "latest")
+     :analysis_type (or (:analysis_type config) "Image analysis")
+     :created_at now
+     :updated_at now}))
 
 (defn prepare-user [user]
   (let [now (current-timestamp)]
@@ -176,18 +185,26 @@
                       (:id image) (:image_data image) (:mime_type image) (:filename image) (:status image) (:created_at image) (:updated_at image)]
                      {:return-keys true}))
 
-(defn db-update-image [id updates & [conn]]
+(defn db-add-image-analysis [analysis & [conn]]
+  (let [ds (or conn ds)]
+    (jdbc/execute-one! ds
+                       ["INSERT INTO image_analyses (id, image_id, status, model_version, analysis_type, result, error_message, created_at, updated_at)
+                         VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::jsonb, ?, ?, ?)"
+                        (:id analysis) (:image_id analysis) (:status analysis) (:model_version analysis) (:analysis_type analysis) (:result analysis) (:error_message analysis) (:created_at analysis) (:updated_at analysis)]
+                       {:return-keys true})))
+
+(defn db-update-image-analysis [id updates & [conn]]
   (let [ds (or conn ds)
         now (current-timestamp)
-        updateable-fields (select-keys updates [:status :gemini_result :error_message])
+        updateable-fields (select-keys updates [:status :result :error_message :model_version :analysis_type])
         updateable-fields (assoc updateable-fields :updated_at now)]
     (if (empty? (dissoc updateable-fields :updated_at))
       (do
-        (println "No fields to update for image ID:" id)
+        (println "No fields to update for image analysis ID:" id)
         nil)
-      (let [sql (str "UPDATE images SET "
-                     (str/join ", " (map #(if (= % :gemini_result)
-                                            "gemini_result = ?::jsonb"
+      (let [sql (str "UPDATE image_analyses SET "
+                     (str/join ", " (map #(if (= % :result)
+                                            "result = ?::jsonb"
                                             (str (name %) " = ?"))
                                          (keys updateable-fields)))
                      " WHERE id = ?::uuid")
@@ -196,20 +213,43 @@
                            (into [sql] params)
                            {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))))
 
+(defn db-get-image-analyses [image_id & [conn]]
+  (let [ds (or conn ds)]
+    (let [analyses (jdbc/execute! ds
+                                  ["SELECT * FROM image_analyses WHERE image_id = ?::uuid ORDER BY created_at DESC" image_id]
+                                  {:builder-fn rs/as-unqualified-lower-maps})]
+      (map #(update % :result
+                    (fn [result]
+                      (when result
+                        (try
+                          (json/parse-string (.getValue result) true)
+                          (catch Exception e
+                            (println "Error parsing result:" (.getMessage e))
+                            result)))))
+           analyses))))
+
+(defn db-update-image [id updates & [conn]]
+  (let [ds (or conn ds)
+        now (current-timestamp)
+        updateable-fields (select-keys updates [:status :filename :mime_type :image_data])
+        updateable-fields (assoc updateable-fields :updated_at now)]
+    (if (empty? (dissoc updateable-fields :updated_at))
+      (do
+        (println "No fields to update for image ID:" id)
+        nil)
+      (let [sql (str "UPDATE images SET "
+                     (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
+                     " WHERE id = ?::uuid")
+            params (concat (vals updateable-fields) [id])]
+        (jdbc/execute-one! ds
+                           (into [sql] params)
+                           {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))))
+
 (defn db-get-image [id & [conn]]
   (let [ds (or conn ds)]
-    (let [image (jdbc/execute-one! ds
-                                   ["SELECT * FROM images WHERE id = ?::uuid" id]
-                                   {:builder-fn rs/as-unqualified-lower-maps})]
-      (if image
-        (update image :gemini_result
-                #(when % 
-                   (try
-                     (json/parse-string (.getValue %) true)
-                     (catch Exception e
-                       (println "Error parsing gemini_result:" (.getMessage e))
-                       %))))
-        image))))
+    (jdbc/execute-one! ds
+                       ["SELECT * FROM images WHERE id = ?::uuid" id]
+                       {:builder-fn rs/as-unqualified-lower-maps})))
 
 (defn db-add-user [user]
   (try
@@ -552,6 +592,7 @@
           (status (response {:error "Database error" :message (.getMessage e)}) 400)))
       (status (response {:error "Invalid image format" :data image}) 400))))
 
+
 (defn analyze-image [request id]
   (println "Analyzing image with ID:" id)
   (println "Raw request body:" (:body request))
@@ -567,23 +608,28 @@
           (if (valid-analysis-config? config)
             (try
               (println "Starting analysis thread for image:" image)
-              (thread
-                (try
-                  (db-update-image id {:status "processing"} conn)
-                  (let [model-version (or (:model_version config) :latest)
-                        analysis-type (or (:analysis_type config) "Image analysis")
-                        result (gemini/call-gemini-api (:image_data image) model-version analysis-type)]
-                    (db-update-image id
-                                     {:status "completed"
-                                      :gemini_result (json/generate-string result)}
-                                     conn))
-                  (catch Exception e
-                    (println "Error processing image ID:" id "Error:" (.getMessage e))
-                    (db-update-image id
-                                     {:status "failed"
-                                      :error_message (.getMessage e)}
-                                     conn))))
-              (response {:status "analysis_started" :image_id id}))
+              (let [analysis (prepare-image-analysis id config)]
+                (db-add-image-analysis analysis conn)
+                (thread
+                  (try
+                    (println "Thread started for analysis ID:" (:id analysis))
+                    (db-update-image-analysis (:id analysis) {:status "processing"} conn)
+                    (println "Calling Gemini API for analysis ID:" (:id analysis))
+                    (let [result (gemini/call-gemini-api (:image_data image) (:model_version analysis) (:analysis_type analysis))]
+                      (println "Gemini API returned result for analysis ID:" (:id analysis) "Result:" result)
+                      (db-update-image-analysis (:id analysis)
+                                                {:status "completed"
+                                                 :result (json/generate-string result)}
+                                                conn)
+                      (println "Analysis completed for ID:" (:id analysis)))
+                    (catch Exception e
+                      (println "Error processing image analysis ID:" (:id analysis) "Error:" (.getMessage e))
+                      (db-update-image-analysis (:id analysis)
+                                                {:status "failed"
+                                                 :error_message (.getMessage e)}
+                                                conn)
+                      (println "Analysis failed for ID:" (:id analysis)))))
+                (response {:status "analysis_started" :image_id id :analysis_id (:id analysis)})))
             (do
               (println "Invalid analysis config:" config)
               (status (response {:error "Invalid analysis configuration" :data config}) 400))))
@@ -593,26 +639,31 @@
       (do
         (println "Invalid UUID format:" id)
         (status (response {:error "Invalid UUID format" :id id}) 400)))))
-
-(defn get-image-analysis [id]
-  (try
-    (if (valid-uuid? id)
-      (if-let [image (db-get-image id)]
-        (let [status (:status image)
-              response {:status status}]
-          (cond
-            (= status "failed") {:status 200 :body (assoc response :error_message (:error_message image))}
-            (= status "completed") {:status 200 :body (assoc response :gemini_result (:gemini_result image))}
-            :else {:status 200 :body response}))
-        {:status 404 :body {:error "Image not found"}})
-      {:status 400 :body {:error "Invalid UUID format" :id id}})
-    (catch Exception e
-      (println "Error in get-image-analysis for ID:" id "Error:" (.getMessage e))
-      {:status 500 :body {:error "Internal server error" :message (.getMessage e)}})))
+  
+  (defn get-image-analysis [id]
+    (try
+      (if (valid-uuid? id)
+        (if-let [analysis (db-get-image-analyses id)]
+          (let [status (:status analysis)
+                response {:status status
+                          :image_id (:image_id analysis)
+                          :analysis_id (:id analysis)
+                          :model_version (:model_version analysis)
+                          :analysis_type (:analysis_type analysis)}]
+            (cond
+              (= status "failed") {:status 200 :body (assoc response :error_message (:error_message analysis))}
+              (= status "completed") {:status 200 :body (assoc response :result (:result analysis))}
+              :else {:status 200 :body response}))
+          {:status 404 :body {:error "Image analysis not found"}})
+        {:status 400 :body {:error "Invalid UUID format" :id id}})
+      (catch Exception e
+        (println "Error in get-image-analysis for ID:" id "Error:" (.getMessage e))
+        {:status 500 :body {:error "Internal server error" :message (.getMessage e)}})))
 
 (defn get-image [id]
   (if-let [image (db-get-image id)]
-    (response image)
+    (let [analyses (db-get-image-analyses id)]
+      (response (assoc image :analyses analyses)))
     (status (response {:error "Image not found"}) 404)))
 
 (defn get-items-for-location [location-id]
