@@ -12,43 +12,13 @@
             [workshop-api.middleware :as middleware]
             [buddy.auth.middleware :refer [wrap-authentication wrap-authorization]]))
 
-(defn debug-wrap-params-v0 [handler]
-  (fn [request]
-    (println "wrap-params input request:" (select-keys request [:query-string :query-params]))
-    (let [response (wrap-params handler)]
-      (println "wrap-params output query-params:" (:query-params (response request)))
-      (response request))))
-
-(defn debug-wrap-params [handler]
-  (fn [request]
-    (println "wrap-params input request:" (select-keys request [:query-string :query-params]))
-    (let [wrapped-handler (wrap-params handler)]
-      (let [response (wrapped-handler request)]
-        (println "wrap-params output query-params:" (:query-params request))
-        response))))
-
-(defn wrap-error-handling [handler]
-  (fn [request]
-    (try
-      (handler request)
-      (catch clojure.lang.ExceptionInfo e
-        (println "wrap-error-handling caught ExceptionInfo:" (ex-data e) "URI:" (:uri request))
-        (if (= (:buddy.auth/type (ex-data e)) :buddy.auth/unauthorized)
-          {:status 401 :body {:message "Unauthorized"}}
-          (do
-            (println "Unexpected ExceptionInfo:" (.getMessage e))
-            {:status 500 :body {:error "Internal server error" :message (.getMessage e)}})))
-      (catch Exception e
-        (println "wrap-error-handling caught Exception:" (.getMessage e) "Stacktrace:" (.getStackTrace e) "URI:" (:uri request))
-        {:status 500 :body {:error "Internal server error" :message (.getMessage e)}}))))
-
 (def app
   (-> (routes
        routes/test-routes
        routes/auth-routes
        routes/app-routes)
       (wrap-json-body {:keywords? true :malformed-response {:status 400 :body "Invalid JSON"}})
-      debug-wrap-params
+      wrap-params
       middleware/wrap-error-handling
       (wrap-authentication auth/auth-backend)
       (wrap-authorization auth/auth-backend)
