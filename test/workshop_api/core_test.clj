@@ -902,7 +902,7 @@
                                     (println "Failed to parse response:" (.getMessage e))
                                     {}))]
            (is (= 400 (:status response)) "Expected 400 status")
-           (is (= "Invalid UUID format" (:error response-body)) "Expected error message"))))))
+           (is (= "Invalid UUID format" (:error response-body)) "Expected error message")))))))
 
 (deftest test-get-image-analysis
   (testing "Getting image analysis with valid analysis_id"
@@ -931,16 +931,19 @@
                request (-> (mock/request :get (str "/api/images/" analysis-id "/analyze"))
                            (assoc-in [:headers "Authorization"] (str "Bearer " token)))
                response (app (assoc request :next.jdbc/connection tx))
-               response-body (json/parse-string (:body response) true)]
+               response-body (try (json/parse-string (:body response) true)
+                                  (catch Exception e
+                                    (println "Failed to parse response:" (.getMessage e))
+                                    {}))]
            (is (= 200 (:status response)) "Expected 200 status")
            (is (= "completed" (:status response-body)) "Expected completed status")
-           (is (= analysis-id (:analysis_id response-body)) "Expected correct analysis_id")
+           (is (= analysis-id (:id response-body)) "Expected correct analysis_id")
            (is (= image-id (:image_id response-body)) "Expected correct image_id")
            (is (= "latest" (:model_version response-body)) "Expected correct model_version")
            (is (= "Image analysis" (:analysis_type response-body)) "Expected correct analysis_type")
            (is (= {:mock_result "Analyzed data with latest and Image analysis"} (:result response-body))
                "Expected correct result"))))))
-    (testing "Getting image analysis with non-existent analysis_id"
+  (testing "Getting image analysis with non-existent analysis_id"
     (db-fixture
      (fn []
        (jdbc/with-transaction [tx ds]
@@ -953,7 +956,10 @@
                request (-> (mock/request :get (str "/api/images/" analysis-id "/analyze"))
                            (assoc-in [:headers "Authorization"] (str "Bearer " token)))
                response (app (assoc request :next.jdbc/connection tx))
-               response-body (json/parse-string (:body response) true)]
+               response-body (try (json/parse-string (:body response) true)
+                                  (catch Exception e
+                                    (println "Failed to parse response:" (.getMessage e))
+                                    {}))]
            (is (= 404 (:status response)) "Expected 404 status")
            (is (= "Image analysis not found" (:error response-body)) "Expected error message"))))))
   (testing "Getting image analysis with invalid UUID"
@@ -969,9 +975,38 @@
                request (-> (mock/request :get (str "/api/images/" analysis-id "/analyze"))
                            (assoc-in [:headers "Authorization"] (str "Bearer " token)))
                response (app (assoc request :next.jdbc/connection tx))
-               response-body (json/parse-string (:body response) true)]
+               response-body (try (json/parse-string (:body response) true)
+                                  (catch Exception e
+                                    (println "Failed to parse response:" (.getMessage e))
+                                    {}))]
            (is (= 400 (:status response)) "Expected 400 status")
-           (is (= "Invalid UUID format" (:error response-body)) "Expected error message"))))))))
+           (is (= "Invalid UUID format" (:error response-body)) "Expected error message"))))))
+  (testing "Getting image analysis without JWT"
+    (db-fixture
+     (fn []
+       (jdbc/with-transaction [tx ds]
+         (let [image-id (generate-id)
+               _ (jdbc/execute-one! tx
+                                    ["INSERT INTO images (id, image_data, mime_type, created_at, updated_at)
+                                      VALUES (?::uuid, ?, ?, ?, ?)"
+                                     image-id "data" "image/jpeg" (current-timestamp) (current-timestamp)]
+                                    {:builder-fn rs/as-unqualified-lower-maps})
+               analysis-id (generate-id)
+               _ (jdbc/execute-one! tx
+                                    ["INSERT INTO image_analyses (id, image_id, status, model_version, analysis_type, result, created_at, updated_at)
+                                      VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::jsonb, ?, ?)"
+                                     analysis-id image-id "completed" "latest" "Image analysis"
+                                     (json/generate-string {:mock_result "Analyzed data with latest and Image analysis"})
+                                     (current-timestamp) (current-timestamp)]
+                                    {:builder-fn rs/as-unqualified-lower-maps})
+               request (mock/request :get (str "/api/images/" analysis-id "/analyze"))
+               response (app (assoc request :next.jdbc/connection tx))
+               response-body (try (json/parse-string (:body response) true)
+                                  (catch Exception e
+                                    (println "Failed to parse response:" (.getMessage e))
+                                    {}))]
+           (is (= 401 (:status response)) "Expected 401 status")
+           (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))))))
 
 (deftest test-get-items-for-location
   (testing "Getting items for a valid location_id"
@@ -1021,9 +1056,9 @@
           request (mock/request :get (str "/api/locations/" non-existent-location-id "/items"))
           response (app request)
           response-body (try (json/parse-string (:body response) true)
-                            (catch Exception e
-                              (println "Failed to parse response:" (.getMessage e))
-                              {}))]
+                             (catch Exception e
+                               (println "Failed to parse response:" (.getMessage e))
+                               {}))]
       (is (= 404 (:status response)) "Expected 404 status")
       (is (= "Location not found" (:error response-body)) "Expected error message"))))
 
