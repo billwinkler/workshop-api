@@ -6,7 +6,10 @@
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [cheshire.core :as json]
-            [workshop-api.core :refer [app ds generate-id current-timestamp db-add-image db-add-image-analysis auth-backend valid-uuid?]]
+            [workshop-api.auth :refer [auth-backend]]            
+            [workshop-api.db :refer [ds db-add-image db-add-image-analysis current-timestamp]]
+            [workshop-api.core :refer [app]]
+            [workshop-api.util :refer [generate-id valid-uuid?]]
             [buddy.sign.jwt :as jwt]
             [clojure.string :as str]))
 

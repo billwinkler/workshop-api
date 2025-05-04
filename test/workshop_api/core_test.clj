@@ -12,7 +12,7 @@
                                      db-add-user db-add-item-image db-add-location-image
                                      db-get-image-analyses current-timestamp]]
             [workshop-api.core :refer [app]]
-            [workshop-api.util :refer [generate-id]]
+            [workshop-api.util :refer [generate-id valid-uuid?]]
             [buddy.sign.jwt :as jwt]
             [buddy.hashers :as hashers]
             [buddy.auth.middleware :refer [wrap-authentication]]
@@ -61,14 +61,6 @@
       (println "Failed to truncate tables:" (.getMessage e)))))
 
 (use-fixtures :each db-fixture)
-
-;; Helper function to check if a string is a valid UUID
-(defn valid-uuid? [s]
-  (try
-    (java.util.UUID/fromString s)
-    true
-    (catch IllegalArgumentException _
-      false)))
 
 ;; Helper function for next.jdbc to coerce unqualified keys
 (defn find-by-keys-unqualified
