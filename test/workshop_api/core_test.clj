@@ -7,10 +7,12 @@
             [next.jdbc.sql :as sql]
             [next.jdbc.result-set :as rs]
             [cheshire.core :as json]
-            [workshop-api.core :refer [app ds generate-id current-timestamp db-add-location
-                                       db-get-image db-add-item db-add-image db-add-user prepare-user
-                                       db-add-item-image db-add-location-image 
-                                       db-get-image-analyses auth-backend]]
+            [workshop-api.auth :refer [prepare-user auth-backend]]
+            [workshop-api.db :refer [ds db-add-location db-get-image db-add-item db-add-image
+                                     db-add-user db-add-item-image db-add-location-image
+                                     db-get-image-analyses current-timestamp]]
+            [workshop-api.core :refer [app]]
+            [workshop-api.util :refer [generate-id]]
             [buddy.sign.jwt :as jwt]
             [buddy.hashers :as hashers]
             [buddy.auth.middleware :refer [wrap-authentication]]
