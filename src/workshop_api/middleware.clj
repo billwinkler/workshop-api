@@ -32,9 +32,13 @@
     (try
       (handler request)
       (catch clojure.lang.ExceptionInfo e
-        (println "in wrap-error-handling, ex-data:" (ex-data e))
+        (println "wrap-error-handling caught ExceptionInfo:" (ex-data e))
         (if (= (:buddy.auth/type (ex-data e)) :buddy.auth/unauthorized)
           {:status 401 :body {:message "Unauthorized"}}
           (do
-            (println "Unexpected error:" (.getMessage e))
-            {:status 500 :body {:error "Internal server error" :message (.getMessage e)}}))))))
+            (println "Unexpected ExceptionInfo:" (.getMessage e))
+            {:status 500 :body {:error "Internal server error" :message (.getMessage e)}})))
+      (catch Exception e
+        (println "wrap-error-handling caught Exception:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
+        {:status 500 :body {:error "Internal server error" :message (.getMessage e)}}))))
+

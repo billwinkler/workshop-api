@@ -56,19 +56,43 @@
              (or (nil? (:filename image)) (string? (:filename image))))]
     result))
 
-(defn valid-uuid? [s]
+(defn valid-uuid?=v0 [s]
   (try
     (java.util.UUID/fromString s)
     true
     (catch IllegalArgumentException _ false)))
 
-(defn valid-analysis-config? [config]
+(defn valid-uuid? [s]
+  (println "Checking UUID, input:" s "type:" (type s))
+  (if (string? s)
+    (try
+      (java.util.UUID/fromString s)
+      (println "UUID valid:" s)
+      true
+      (catch IllegalArgumentException e
+        (println "Invalid UUID:" s "Error:" (.getMessage e))
+        false))
+    (do
+      (println "UUID input is not a string:" s)
+      false)))
+
+(defn valid-analysis-config?-v0 [config]
   (let [model-version (if (string? (:model_version config))
                         (keyword (:model_version config))
                         (:model_version config))]
     (println "Processed model_version:" model-version)
     (and (or (nil? model-version) (keyword? model-version))
          (or (nil? (:analysis_type config)) (string? (:analysis_type config))))))
+
+(defn valid-analysis-config? [config]
+  (let [model-version (if (string? (:model_version config))
+                        (keyword (:model_version config))
+                        (:model_version config))]
+    (println "Processed model_version:" model-version)
+    (and (map? config)
+         (or (keyword? model-version) (string? model-version))
+         (string? (:analysis_type config))
+         (not (clojure.string/blank? (:analysis_type config))))))
 
 (defn generate-id [] (str (java.util.UUID/randomUUID)))
 
