@@ -9,8 +9,8 @@
             [workshop-api.auth :refer [auth-backend]]
             [workshop-api.db :refer [ds db-add-location db-get-location db-update-location db-check-location-items current-timestamp db-add-item]]
             [workshop-api.core :refer [app]]
-            [workshop-api.util :refer [generate-id]]
-            [workshop-api.common :refer [valid-uuid?]]))
+            [workshop-api.common :refer [valid-uuid?]]
+            [workshop-api.util :refer [generate-id]]))
 
 (def jwt-secret (or (System/getenv "JWT_SECRET") "your-secure-secret-here"))
 
@@ -108,7 +108,11 @@
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
           _ (db-add-location location)
-          update-data {:name "Updated Tool Shed" :description "Updated storage for tools"}
+          update-data {:name "Updated Tool Shed"
+                       :description "Updated storage for tools"
+                       :label "L1"
+                       :type "Shed"
+                       :area "Backyard"}
           _ (println "Updating location ID:" location-id "with data:" update-data)
           request (-> (mock/request :patch (str "/api/locations/" location-id))
                       (mock/json-body update-data)
@@ -120,6 +124,8 @@
                                (println "Error message:" (.getMessage e))
                                {:error (.getMessage e)}))
           db-location (find-location-by-id ds location-id)]
+      (println "Response body:" response-body)
+      (println "Database location:" db-location)
       (is (= 200 (:status response)) "Expected 200 status")
       (is (= "Updated Tool Shed" (:name response-body)) "Expected updated name in response")
       (is (= "Updated storage for tools" (:description response-body)) "Expected updated description in response")
@@ -165,6 +171,8 @@
                                (println "Error message:" (.getMessage e))
                                {:error (.getMessage e)}))
           db-location (find-location-by-id ds location-id)]
+      (println "Response body:" response-body)
+      (println "Database location:" db-location)
       (is (= 200 (:status response)) "Expected 200 status")
       (is (= "Updated Tool Shed" (:name response-body)) "Expected updated name in response")
       (is (= "Updated storage for tools" (:description response-body)) "Expected updated description in response")
@@ -201,6 +209,7 @@
                                (println "Failed to parse response, full response:" response)
                                (println "Error message:" (.getMessage e))
                                {:error (.getMessage e)}))]
+      (println "Response for invalid parent_id:" response-body)
       (is (= 400 (:status response)) "Expected 400 status")
       (is (= "Invalid location format" (:error response-body)) "Expected error message")))
   (testing "Updating a location with associated items with JWT"
@@ -252,6 +261,8 @@
                                (println "Error message:" (.getMessage e))
                                {:error (.getMessage e)}))
           db-location (find-location-by-id ds location-id)]
+      (println "Response body:" response-body)
+      (println "Database location:" db-location)
       (is (= 200 (:status response)) "Expected 200 status")
       (is (= "Updated Tool Shed" (:name response-body)) "Expected updated name in response")
       (is (= "Updated storage for tools" (:description response-body)) "Expected updated description in response")
@@ -264,6 +275,7 @@
           token (create-jwt-token user)
           non-existent-id "00000000-0000-0000-0000-000000000000"
           update-data {:name "Updated Tool Shed"}
+          _ (println "Updating non-existent location ID:" non-existent-id "with data:" update-data)
           request (-> (mock/request :patch (str "/api/locations/" non-existent-id))
                       (mock/json-body update-data)
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
@@ -273,6 +285,7 @@
                                (println "Failed to parse response, full response:" response)
                                (println "Error message:" (.getMessage e))
                                {:error (.getMessage e)}))]
+      (println "Response for non-existent location:" response-body)
       (is (= 404 (:status response)) "Expected 404 status")
       (is (= "Location not found" (:error response-body)) "Expected error message")))
   (testing "Updating a location with invalid data with JWT"
@@ -299,11 +312,13 @@
                                (println "Failed to parse response, full response:" response)
                                (println "Error message:" (.getMessage e))
                                {:error (.getMessage e)}))]
+      (println "Response for invalid data:" response-body)
       (is (= 400 (:status response)) "Expected 400 status")
       (is (= "Invalid location format" (:error response-body)) "Expected error message")))
   (testing "Updating a location without JWT"
     (let [location-id (generate-id)
           update-data {:name "Updated Tool Shed"}
+          _ (println "Updating location ID:" location-id "without JWT, data:" update-data)
           request (-> (mock/request :patch (str "/api/locations/" location-id))
                       (mock/json-body update-data))
           response (app request)
@@ -312,6 +327,7 @@
                                (println "Failed to parse response, full response:" response)
                                (println "Error message:" (.getMessage e))
                                {:error (.getMessage e)}))]
+      (println "Response for no JWT:" response-body)
       (is (= 401 (:status response)) "Expected 401 status")
       (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message"))))
 
@@ -338,6 +354,7 @@
                                (println "Error message:" (.getMessage e))
                                {:error (.getMessage e)}))
           db-location (find-location-by-id ds location-id)]
+      (println "Response for delete valid location:" response-body)
       (is (= 200 (:status response)) "Expected 200 status")
       (is (= "success" (:status response-body)) "Expected success status in response")
       (is (empty? db-location) "Expected no location in database")))
@@ -353,6 +370,7 @@
                                (println "Failed to parse response, full response:" response)
                                (println "Error message:" (.getMessage e))
                                {:error (.getMessage e)}))]
+      (println "Response for delete non-existent location:" response-body)
       (is (= 404 (:status response)) "Expected 404 status")
       (is (= "Location not found" (:error response-body)) "Expected error message")))
   (testing "Deleting a location with items with JWT"
@@ -386,6 +404,7 @@
                                (println "Error message:" (.getMessage e))
                                {:error (.getMessage e)}))
           db-location (find-location-by-id ds location-id)]
+      (println "Response for delete location with items:" response-body)
       (is (= 400 (:status response)) "Expected 400 status")
       (is (= "Cannot delete location with items" (:error response-body)) "Expected error message")
       (is (= 1 (count db-location)) "Expected location to remain in database")))
@@ -398,5 +417,6 @@
                                (println "Failed to parse response, full response:" response)
                                (println "Error message:" (.getMessage e))
                                {:error (.getMessage e)}))]
+      (println "Response for delete without JWT:" response-body)
       (is (= 401 (:status response)) "Expected 401 status")
       (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message"))))
