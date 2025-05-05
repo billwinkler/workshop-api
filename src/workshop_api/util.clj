@@ -42,11 +42,15 @@
        (or (nil? (:notes item)) (string? (:notes item)))
        (or (nil? (:acquisition_date item)) (string? (:acquisition_date item)))))
 
-(defn valid-partial-location? [loc]
-  (and (map? loc)
-       (every? #(or (nil? (loc %)) (string? (loc %))) [:label :name :type :description :area])
-       (every? #(or (nil? (loc %)) (not (str/blank? (loc %)))) [:name :label])
-       (or (nil? (:parent_id loc)) (valid-uuid? (:parent_id loc)))))
+ (defn valid-partial-location? [loc]
+   (and (map? loc)
+       (every? #(or (nil? (loc %)) (not (str/blank? (loc %)))) [:name :type :area])
+       (or (nil? (:label loc)) (string? (:label loc))) ; Allow empty label
+       (or (nil? (:description loc)) (string? (:description loc)))
+       (or (nil? (:parent_id loc)) (valid-uuid? (:parent_id loc)))
+       (or (nil? (:parent_id loc))
+           (and (valid-uuid? (:parent_id loc))
+                (db/db-get-location (:parent_id loc))))))
 
 (defn valid-image? [image]
   (let [result 
