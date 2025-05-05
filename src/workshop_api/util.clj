@@ -6,6 +6,20 @@
 (defn keywordize-keys [m]
   (into {} (map (fn [[k v]] [(if (string? k) (keyword k) k) v]) m)))
 
+(defn valid-uuid? [s]
+  (println "Checking UUID, input:" s "type:" (type s))
+  (if (string? s)
+    (try
+      (java.util.UUID/fromString s)
+      (println "UUID valid:" s)
+      true
+      (catch IllegalArgumentException e
+        (println "Invalid UUID:" s "Error:" (.getMessage e))
+        false))
+    (do
+      (println "UUID input is not a string:" s)
+      false)))
+
 (defn valid-location? [loc]
   (let [result (and (string? (:name loc))
                     (string? (:type loc))
@@ -42,12 +56,10 @@
        (or (nil? (:acquisition_date item)) (string? (:acquisition_date item)))))
 
 (defn valid-partial-location? [loc]
-  (and (or (nil? (:name loc)) (string? (:name loc)))
-       (or (nil? (:type loc)) (string? (:type loc)))
-       (or (nil? (:area loc)) (string? (:area loc)))
-       (or (nil? (:label loc)) (string? (:label loc)))
-       (or (nil? (:description loc)) (string? (:description loc)))
-       (or (nil? (:parent_id loc)) (string? (:parent_id loc)))))
+  (and (map? loc)
+       (every? #(or (nil? (loc %)) (string? (loc %))) [:label :name :type :description :area])
+       (every? #(or (nil? (loc %)) (not (str/blank? (loc %)))) [:name :label])
+       (or (nil? (:parent_id loc)) (valid-uuid? (:parent_id loc)))))
 
 (defn valid-image? [image]
   (let [result 
@@ -55,26 +67,6 @@
              (string? (:mime_type image))
              (or (nil? (:filename image)) (string? (:filename image))))]
     result))
-
-(defn valid-uuid?=v0 [s]
-  (try
-    (java.util.UUID/fromString s)
-    true
-    (catch IllegalArgumentException _ false)))
-
-(defn valid-uuid? [s]
-  (println "Checking UUID, input:" s "type:" (type s))
-  (if (string? s)
-    (try
-      (java.util.UUID/fromString s)
-      (println "UUID valid:" s)
-      true
-      (catch IllegalArgumentException e
-        (println "Invalid UUID:" s "Error:" (.getMessage e))
-        false))
-    (do
-      (println "UUID input is not a string:" s)
-      false)))
 
 (defn valid-analysis-config?-v0 [config]
   (let [model-version (if (string? (:model_version config))

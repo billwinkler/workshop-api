@@ -165,12 +165,17 @@
   (let [now (current-timestamp)
         updateable-fields (select-keys loc [:label :name :type :description :parent_id :area])
         updateable-fields (assoc updateable-fields :updated_at now)]
-    (jdbc/execute-one! ds
-                       (into ["UPDATE locations SET "
-                              (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
-                              " WHERE id = ?::uuid"]
-                             (concat (vals updateable-fields) [id]))
-                       {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))
+    (if (or (empty? (dissoc updateable-fields :updated_at))
+            (and (:name updateable-fields) (str/blank? (:name updateable-fields))))
+      (do
+        (println "No valid fields to update or invalid name for location ID:" id)
+        nil)
+      (jdbc/execute-one! ds
+                         (into ["UPDATE locations SET "
+                                (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
+                                " WHERE id = ?::uuid"]
+                               (concat (vals updateable-fields) [id]))
+                         {:return-keys true :builder-fn rs/as-unqualified-lower-maps}))))
 
 (defn db-delete-item [id]
   (jdbc/execute-one! ds

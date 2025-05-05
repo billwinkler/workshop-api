@@ -18,6 +18,8 @@
 
 (defn update-location [request id]
   (let [loc (db/keywordize-keys (:body request))]
+    (println "Validating partial location:" loc "Result:"
+             (util/valid-partial-location? loc))
     (if (util/valid-partial-location? loc)
       (if-let [existing-loc (db/db-get-location id)]
         (if-let [updated-loc (db/db-update-location id loc)]

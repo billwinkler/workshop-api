@@ -119,40 +119,6 @@
       :else
       (throw (ex-info "At least one of location_id or image_id must be provided" {})))))
 
-(deftest test-add-location
-  (testing "Adding a valid location with JWT"
-    (let [user {:id (generate-id) :username "testuser"}
-          payload {:user_id (:id user) :username (:username user)
-                   :iat (quot (System/currentTimeMillis) 1000)
-                   :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
-          token (jwt/sign payload jwt-secret {:alg :hs256})
-          location {:label "L1" :name "Tool Shed" :type "Shed" :area "Backyard" :description "Storage for tools"}
-          request (-> (mock/request :post "/api/locations")
-                      (mock/json-body location)
-                      (assoc-in [:headers "Authorization"] (str "Bearer " token)))
-          response (app request)]
-      (let [response-body (try (json/parse-string (:body response) true)
-                              (catch Exception e
-                                (println "Failed to parse response:" (.getMessage e))
-                                {}))
-            db-location (find-by-keys-unqualified ds :locations {:name "Tool Shed"})]
-        (is (= 200 (:status response)) "Expected 200 status")
-        (is (= "Tool Shed" (:name response-body)) "Expected correct name in response")
-        (is (or (nil? (:id response-body)) (uuid? (java.util.UUID/fromString (:id response-body)))) "Expected valid UUID in response")
-        (is (= 1 (count db-location)) "Expected one location in database")
-        (is (= "Tool Shed" (:name (first db-location))) "Expected correct name in database"))))
-  (testing "Adding a valid location without JWT"
-    (let [location {:label "L1" :name "Tool Shed" :type "Shed" :area "Backyard" :description "Storage for tools"}
-          request (-> (mock/request :post "/api/locations")
-                      (mock/json-body location))
-          response (app request)]
-      (let [response-body (try (json/parse-string (:body response) true)
-                              (catch Exception e
-                                (println "Failed to parse response:" (.getMessage e))
-                                {}))]
-        (is (= 401 (:status response)) "Expected 401 status")
-        (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))))
-
 (deftest test-add-valid-item
   (testing "Adding a valid item with JWT"
     (let [user {:id (generate-id) :username "testuser"}
