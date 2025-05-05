@@ -10,7 +10,8 @@
             [workshop-api.db :refer [ds db-add-image db-get-image db-get-image-analyses
                                      db-add-image-analysis current-timestamp]]
             [workshop-api.core :refer [app]]
-            [workshop-api.util :refer [generate-id valid-uuid?]]
+            [workshop-api.util :refer [generate-id]]
+            [workshop-api.common :refer [valid-uuid?]]
             [buddy.sign.jwt :as jwt]
             [clojure.string :as str]))
 

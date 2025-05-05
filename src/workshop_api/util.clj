@@ -1,24 +1,11 @@
 (ns workshop-api.util
   (:require [clojure.string :as str]
             [workshop-api.db :as db]
+            [workshop-api.common :refer [valid-uuid?]]
             [workshop-api.gemini-describe :as gemini]))
 
 (defn keywordize-keys [m]
   (into {} (map (fn [[k v]] [(if (string? k) (keyword k) k) v]) m)))
-
-(defn valid-uuid? [s]
-  (println "Checking UUID, input:" s "type:" (type s))
-  (if (string? s)
-    (try
-      (java.util.UUID/fromString s)
-      (println "UUID valid:" s)
-      true
-      (catch IllegalArgumentException e
-        (println "Invalid UUID:" s "Error:" (.getMessage e))
-        false))
-    (do
-      (println "UUID input is not a string:" s)
-      false)))
 
 (defn valid-location? [loc]
   (let [result (and (string? (:name loc))

@@ -3,7 +3,8 @@
             [next.jdbc.sql :as sql]
             [next.jdbc.result-set :as rs]
             [clojure.string :as str]
-            [cheshire.core :as json])
+            [cheshire.core :as json]
+            [workshop-api.common :refer [valid-uuid?]])
   (:import [java.sql Timestamp]
            [java.time Instant]))
 
@@ -161,30 +162,6 @@
                            (into [sql] params)
                            {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))))
 
-(defn db-update-location [id loc]
-  (let [now (current-timestamp)
-        updateable-fields (select-keys loc [:label :name :type :description :parent_id :area])
-        updateable-fields (assoc updateable-fields :updated_at now)]
-    (if (empty? (dissoc updateable-fields :updated_at))
-      (do
-        (println "No fields to update for location ID:" id)
-        nil)
-      (let [sql (str "UPDATE locations SET "
-                     (str/join ", " (map #(if (= % :parent_id)
-                                            "parent_id = ?::uuid"
-                                            (str (name %) " = ?"))
-                                         (keys updateable-fields)))
-                     " WHERE id = ?::uuid")
-            params (concat (vals updateable-fields) [id])]
-        (println "Executing update query for location ID:" id "SQL:" sql "Params:" params)
-        (try
-          (jdbc/execute-one! ds
-                             (into [sql] params)
-                             {:return-keys true :builder-fn rs/as-unqualified-lower-maps})
-          (catch Exception e
-            (println "Failed to update location ID:" id "Error:" (.getMessage e))
-            (throw e)))))))
-
 (defn db-delete-item [id]
   (jdbc/execute-one! ds
                      ["DELETE FROM items WHERE id = ?::uuid" id]))
@@ -289,10 +266,44 @@
                              {:builder-fn rs/as-unqualified-lower-maps})]
     (map #(assoc % :location_path (get-location-path (:location_id %))) items)))
 
+(defn db-update-location [id loc]
+  (let [now (current-timestamp)
+        updateable-fields (select-keys loc [:label :name :type :description :parent_id :area])
+        updateable-fields (assoc updateable-fields :updated_at now)
+        required-fields [:label :name :type :area]]
+    (cond
+      (empty? (dissoc updateable-fields :updated_at))
+      (do
+        (println "No fields to update for location ID:" id)
+        nil)
+      (some #(and (contains? updateable-fields %) (str/blank? (get updateable-fields %))) required-fields)
+      (do
+        (println "Invalid required field for location ID:" id "Fields:" updateable-fields)
+        nil)
+      (and (:parent_id updateable-fields)
+           (not (and (valid-uuid? (:parent_id updateable-fields))
+                     (db-get-location (:parent_id updateable-fields)))))
+      (do
+        (println "Invalid or non-existent parent_id for location ID:" id "parent_id:" (:parent_id updateable-fields))
+        nil)
+      :else
+      (let [sql "UPDATE locations SET label = ?, name = ?, type = ?, description = ?, parent_id = ?::uuid, area = ?, updated_at = ? WHERE id = ?::uuid"
+            params [(:label updateable-fields) (:name updateable-fields) (:type updateable-fields)
+                    (:description updateable-fields) (:parent_id updateable-fields) (:area updateable-fields)
+                    now id]]
+        (println "Executing update query for location ID:" id "SQL:" sql "Params:" params)
+        (try
+          (jdbc/execute-one! ds
+                             (into [sql] params)
+                             {:return-keys true :builder-fn rs/as-unqualified-lower-maps})
+          (catch Exception e
+            (println "Failed to update location ID:" id "Error:" (.getMessage e))
+            (throw (ex-info "Database update failed" {:error (.getMessage e)}))))))))
+
 (defn db-get-all-locations []
   (let [locations (jdbc/execute! ds
-                                ["SELECT * FROM locations"]
-                                {:builder-fn rs/as-unqualified-lower-maps})]
+                                 ["SELECT * FROM locations"]
+                                 {:builder-fn rs/as-unqualified-lower-maps})]
     (map #(assoc % :location_path (get-location-path (:id %))) locations)))
 
 (defn db-search-items [query]

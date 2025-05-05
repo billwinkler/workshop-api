@@ -12,7 +12,8 @@
                                      db-add-user db-add-item-image db-add-location-image
                                      db-get-image-analyses current-timestamp]]
             [workshop-api.core :refer [app]]
-            [workshop-api.util :refer [generate-id valid-uuid?]]
+            [workshop-api.common :refer [valid-uuid?]]
+            [workshop-api.util :refer [generate-id]]
             [buddy.sign.jwt :as jwt]
             [buddy.hashers :as hashers]
             [buddy.auth.middleware :refer [wrap-authentication]]

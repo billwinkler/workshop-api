@@ -4,6 +4,7 @@
             [clojure.core.async :refer [thread]]
             [workshop-api.db :as db]
             [workshop-api.util :as util]
+            [workshop-api.common :refer [valid-uuid?]]
             [workshop-api.auth :as auth]
             [buddy.auth :refer [authenticated? throw-unauthorized]]
             [cheshire.core :as json]))
@@ -107,7 +108,7 @@
 
 (defn add-item-image [request]
   (let [{:keys [item_id image_id]} (db/keywordize-keys (:body request))]
-    (if (and (util/valid-uuid? item_id) (util/valid-uuid? image_id))
+    (if (and (valid-uuid? item_id) (valid-uuid? image_id))
       (try
         (if (and (db/db-get-item item_id) (db/db-get-image image_id))
           (do
@@ -120,7 +121,7 @@
 
 (defn add-location-image [request]
   (let [{:keys [location_id image_id]} (db/keywordize-keys (:body request))]
-    (if (and (util/valid-uuid? location_id) (util/valid-uuid? image_id))
+    (if (and (valid-uuid? location_id) (valid-uuid? image_id))
       (try
         (if (and (db/db-get-location location_id) (db/db-get-image image_id))
           (do
@@ -132,7 +133,7 @@
       (status (response {:error "Invalid UUID format" :data {:location_id location_id :image_id image_id}}) 400))))
 
 (defn delete-item-image [item-id image-id]
-  (if (and (util/valid-uuid? item-id) (util/valid-uuid? image-id))
+  (if (and (valid-uuid? item-id) (valid-uuid? image-id))
     (if (db/db-get-item item-id)
       (if (db/db-get-image image-id)
         (do
@@ -143,7 +144,7 @@
     (status (response {:error "Invalid UUID format" :data {:item_id item-id :image_id image-id}}) 400)))
 
 (defn delete-location-image [location-id image-id]
-  (if (and (util/valid-uuid? location-id) (util/valid-uuid? image-id))
+  (if (and (valid-uuid? location-id) (valid-uuid? image-id))
     (if (db/db-get-location location-id)
       (if (db/db-get-image image-id)
         (do
@@ -157,7 +158,7 @@
   (let [item-id (get-in request [:query-params "item_id"])
         token (get-in request [:headers "authorization"])]
     (println "get-item-images: item_id =" item-id ", token =" token)
-    (if (util/valid-uuid? item-id)
+    (if (valid-uuid? item-id)
       (let [images (db/db-get-item-images item-id)]
         (if (seq images)
           (response images)
@@ -168,7 +169,7 @@
   (let [location-id (get-in request [:query-params "location_id"])
         token (get-in request [:headers "authorization"])]
     (println "get-location-images: location_id =" location-id ", token =" token)
-    (if (util/valid-uuid? location-id)
+    (if (valid-uuid? location-id)
       (let [images (db/db-get-location-images location-id)]
         (if (seq images)
           (response images)
@@ -191,7 +192,7 @@
   (println "Analyzing image ID:" id)
   (let [conn (or (:next.jdbc/connection request) db/ds)]
     (cond
-      (not (util/valid-uuid? id))
+      (not (valid-uuid? id))
       (do
         (println "Invalid UUID format:" id)
         (status (response {:error "Invalid UUID format" :id id}) 400))
@@ -240,7 +241,7 @@
   (println "Analyzing image ID:" id)
   (let [conn (or (:next.jdbc/connection request) db/ds)]
     (cond
-      (not (util/valid-uuid? id))
+      (not (valid-uuid? id))
       (do
         (println "Invalid UUID format:" id)
         (status (response {:error "Invalid UUID format" :id id}) 400))
@@ -288,8 +289,8 @@
 (defn get-image-analysis-v0 [request image-id]
   (try
     (println "Processing get-image-analysis for image-id:" image-id)
-    (println "Is UUID valid?" (util/valid-uuid? image-id))    
-    (if (util/valid-uuid? image-id)
+    (println "Is UUID valid?" (valid-uuid? image-id))    
+    (if (valid-uuid? image-id)
       (let [fields-str (get-in request [:query-params "fields"])
             allowed-fields #{"status" "summary" "error_message" "analysis_type"
                              "finish_reason" "usage_metadata" "model_version" "reasoning" "compartments"}
@@ -328,7 +329,7 @@
 (defn get-image-analysis-v1 [request image-id]
   (try
     (println "Processing get-image-analysis for image-id:" image-id)
-    (if (util/valid-uuid? image-id)
+    (if (valid-uuid? image-id)
       (let [fields-str (get-in request [:query-params "fields"])
             allowed-fields #{"status" "summary" "error_message" "analysis_type"
                              "finish_reason" "usage_metadata" "model_version" "reasoning" "compartments"
@@ -390,8 +391,8 @@
 (defn get-image-analysis-v2 [request image-id]
   (try
     (println "Processing get-image-analysis for image-id:" image-id)
-    (println "Is UUID valid?" (util/valid-uuid? image-id))
-    (if (util/valid-uuid? image-id)
+    (println "Is UUID valid?" (valid-uuid? image-id))
+    (if (valid-uuid? image-id)
       (let [fields-str (get-in request [:query-params "fields"])
             allowed-fields #{"status" "summary" "error_message" "analysis_type"
                              "finish_reason" "usage_metadata" "model_version" "reasoning" "compartments"
@@ -460,8 +461,8 @@
   (try
     (println "Processing get-image-analysis for image-id:" image-id)
     (println "Raw query-params:" (:query-params request))
-    (println "Is UUID valid?" (util/valid-uuid? image-id))
-    (if (util/valid-uuid? image-id)
+    (println "Is UUID valid?" (valid-uuid? image-id))
+    (if (valid-uuid? image-id)
       (let [fields-str (get-in request [:query-params "fields"])
             allowed-fields #{"status" "summary" "error_message" "analysis_type"
                              "finish_reason" "usage_metadata" "model_version" "reasoning" "compartments"
@@ -534,7 +535,7 @@
     (status (response {:error "Image not found"}) 404)))
 
 (defn get-items-for-location [location-id]
-  (if (util/valid-uuid? location-id)
+  (if (valid-uuid? location-id)
     (if (db/db-get-location location-id)
       (let [items (db/db-get-items-by-location location-id)]
         (response (map #(assoc % :location_path (util/get-location-path (:location_id %))) items)))
@@ -603,7 +604,11 @@
 
 (defroutes protected-routes
   (POST "/locations" request (add-location request))
-  (PATCH "/locations/:id" [id :as request] (update-location request id))
+  (PATCH "/locations/:id" [id :as request]
+    (println "Matched route PATCH /locations/:id" id)
+    (let [response (update-location request id)]
+      (println "Handler response for id" id ":" response)
+      response))
   (DELETE "/locations/:id" [id] (delete-location id))
   (POST "/items" request (add-item request))
   (PATCH "/items/:id" [id :as request] (update-item request id))
