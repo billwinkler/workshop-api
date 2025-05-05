@@ -52,6 +52,25 @@
            (and (valid-uuid? (:parent_id loc))
                 (db/db-get-location (:parent_id loc))))))
 
+(defn valid-partial-location? [loc]
+  (println "Validating location:" loc)
+  (let [is-map (map? loc)
+        name-type-area (every? #(or (nil? (loc %)) (not (str/blank? (loc %)))) [:name :type :area])
+        label-valid (or (nil? (:label loc)) (string? (:label loc)))
+        desc-valid (or (nil? (:description loc)) (string? (:description loc)))
+        parent-uuid (or (nil? (:parent_id loc)) (valid-uuid? (:parent_id loc)))
+        parent-exists (or (nil? (:parent_id loc)) (and (valid-uuid? (:parent_id loc)) (db/db-get-location (:parent_id loc))))
+        result (and is-map name-type-area label-valid desc-valid parent-uuid parent-exists)]
+    (println "Validation checks:")
+    (println "  map?:" is-map)
+    (println "  name,type,area non-blank?:" name-type-area)
+    (println "  label nil or string?:" label-valid)
+    (println "  description nil or string?:" desc-valid)
+    (println "  parent_id nil or valid UUID?:" parent-uuid)
+    (println "  parent_id exists?:" parent-exists)
+    (println "  Final result:" result)
+    result))
+
 (defn valid-image? [image]
   (let [result 
         (and (string? (:image_data image))

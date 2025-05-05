@@ -175,6 +175,18 @@
                      ["SELECT * FROM locations WHERE id = ?::uuid" id]
                      {:builder-fn rs/as-unqualified-lower-maps}))
 
+(defn db-get-location [id]
+  (println "Fetching location with ID:" id)
+  (try
+    (let [result (jdbc/execute-one! ds
+                                    ["SELECT * FROM locations WHERE id = ?::uuid" id]
+                                    {:builder-fn rs/as-unqualified-lower-maps})]
+      (println "Location fetch result:" result)
+      result)
+    (catch Exception e
+      (println "Error fetching location ID:" id "Error:" (.getMessage e))
+      nil)))
+
 (defn db-update-location [id loc]
   (let [now (current-timestamp)
         updateable-fields (select-keys loc [:label :name :type :description :parent_id :area])
