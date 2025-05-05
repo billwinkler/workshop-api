@@ -165,17 +165,25 @@
   (let [now (current-timestamp)
         updateable-fields (select-keys loc [:label :name :type :description :parent_id :area])
         updateable-fields (assoc updateable-fields :updated_at now)]
-    (if (or (empty? (dissoc updateable-fields :updated_at))
-            (and (:name updateable-fields) (str/blank? (:name updateable-fields))))
+    (if (empty? (dissoc updateable-fields :updated_at))
       (do
-        (println "No valid fields to update or invalid name for location ID:" id)
+        (println "No fields to update for location ID:" id)
         nil)
-      (jdbc/execute-one! ds
-                         (into ["UPDATE locations SET "
-                                (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
-                                " WHERE id = ?::uuid"]
-                               (concat (vals updateable-fields) [id]))
-                         {:return-keys true :builder-fn rs/as-unqualified-lower-maps}))))
+      (let [sql (str "UPDATE locations SET "
+                     (str/join ", " (map #(if (= % :parent_id)
+                                            "parent_id = ?::uuid"
+                                            (str (name %) " = ?"))
+                                         (keys updateable-fields)))
+                     " WHERE id = ?::uuid")
+            params (concat (vals updateable-fields) [id])]
+        (println "Executing update query for location ID:" id "SQL:" sql "Params:" params)
+        (try
+          (jdbc/execute-one! ds
+                             (into [sql] params)
+                             {:return-keys true :builder-fn rs/as-unqualified-lower-maps})
+          (catch Exception e
+            (println "Failed to update location ID:" id "Error:" (.getMessage e))
+            (throw e)))))))
 
 (defn db-delete-item [id]
   (jdbc/execute-one! ds
