@@ -148,6 +148,7 @@
     (status (response {:error "Invalid UUID format" :data {:item_id item-id :image_id image-id}}) 400)))
 
 (defn delete-location-image [location-id image-id]
+  (println "###delete-location-image###:" location-id "image-id:" image-id)
   (if (and (valid-uuid? location-id) (valid-uuid? image-id))
     (if (db/db-get-location location-id)
       (if (db/db-get-image image-id)
