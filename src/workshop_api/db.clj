@@ -191,7 +191,7 @@
   (let [now (current-timestamp)
         updateable-fields (select-keys loc [:label :name :type :description :parent_id :area])
         updateable-fields (assoc updateable-fields :updated_at now)
-        required-fields [:label :name :type :area]
+        required-fields [:name :type :area]
         existing-loc (db-get-location id)]
     (println "Attempting to update location ID:" id "with fields:" updateable-fields)
     (cond

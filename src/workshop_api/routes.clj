@@ -19,13 +19,17 @@
 
 (defn update-location [request id]
   (let [loc (db/keywordize-keys (:body request))]
-    (println "Validating partial location:" loc "Result:"
-             (util/valid-partial-location? loc))
+    (println "Validating partial location:" loc "Result:" (util/valid-partial-location? loc))
+    (when (instance? java.io.InputStream (:body request))
+      (try
+        (.close (:body request))
+        (catch Exception e
+          (println "Error closing request body stream:" (.getMessage e)))))
     (if (util/valid-partial-location? loc)
       (if-let [existing-loc (db/db-get-location id)]
         (if-let [updated-loc (db/db-update-location id loc)]
           (response updated-loc)
-          (status (response {:error "Failed to update location"}) 500))
+          (status (response {:error "Invalid location format" :data loc}) 400))
         (status (response {:error "Location not found"}) 404))
       (status (response {:error "Invalid location format" :data loc}) 400))))
 
