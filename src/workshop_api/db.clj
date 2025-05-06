@@ -14,6 +14,8 @@
       {:dbtype "postgresql" :dbname "workshop_inventory_test" :host "localhost" :user "billwinkler" :password (System/getenv "DB_PASSWORD")}
       {:dbtype "postgresql" :dbname "workshop_inventory" :host "localhost" :user "billwinkler" :password (System/getenv "DB_PASSWORD")})))
 
+;;(def ds (jdbc/get-datasource {:dbtype "postgresql" :dbname "workshop_inventory" :host "localhost" :user "billwinkler" :password (System/getenv "DB_PASSWORD")}))
+
 (def ds (jdbc/get-datasource (get-db-spec)))
 
 (defn current-timestamp [] (Timestamp/from (Instant/now)))
@@ -129,6 +131,21 @@
     (jdbc/execute-one! ds
                        ["SELECT * FROM images WHERE id = ?::uuid" id]
                        {:builder-fn rs/as-unqualified-lower-maps})))
+
+(defn db-get-images
+  ([fields]
+   (db-get-images fields nil))
+  ([fields conn]
+   (let [ds (or conn ds)
+         allowed-fields #{"id" "image_data" "mime_type" "filename" "status" "created_at" "updated_at"}
+         valid-fields (clojure.set/intersection fields allowed-fields)
+         selected-fields (if (empty? valid-fields)
+                           #{"id" "filename" "mime_type" "status"}
+                           valid-fields)
+         sql (str "SELECT " (str/join ", " (map name selected-fields)) " FROM images")]
+     (jdbc/execute! ds
+                    [sql]
+                    {:builder-fn rs/as-unqualified-lower-maps}))))
 
 (defn db-add-user [user]
   (try

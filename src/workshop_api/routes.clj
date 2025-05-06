@@ -84,7 +84,7 @@
 (defn delete-item [id]
   (if-let [item (db/db-get-item id)]
     (do
-      (db/db-delete-item id)
+      (db/db-delete-item)
       (response {:status "success"}))
     (status (response {:error "Item not found"}) 404)))
 
@@ -290,182 +290,11 @@
               (println "Error starting analysis for ID:" id "Error:" (.getMessage e))
               (status (response {:error "Database error" :message (.getMessage e)}) 500))))))))
 
-(defn get-image-analysis-v0 [request image-id]
-  (try
-    (println "Processing get-image-analysis for image-id:" image-id)
-    (println "Is UUID valid?" (valid-uuid? image-id))    
-    (if (valid-uuid? image-id)
-      (let [fields-str (get-in request [:query-params "fields"])
-            allowed-fields #{"status" "summary" "error_message" "analysis_type"
-                             "finish_reason" "usage_metadata" "model_version" "reasoning" "compartments"}
-            requested-fields (if (clojure.string/blank? fields-str)
-                               #{"status" "image_id" "analysis_id" "model_version" "analysis_type"}
-                               (set (map clojure.string/trim (clojure.string/split fields-str #","))))
-            invalid-fields (clojure.set/difference requested-fields allowed-fields)]
-        (println "Requested fields:" requested-fields "Invalid fields:" invalid-fields)
-        (if (seq invalid-fields)
-          {:status 400 :body {:error "Invalid fields requested" :invalid_fields invalid-fields}}
-          (if-let [analysis (first (db/db-get-image-analyses image-id db/ds))]
-            (let [status (:status analysis)
-                  base-response (-> (select-keys analysis [:image_id :model_version :analysis_type :status :error_message])
-                                    (assoc :analysis_id (:id analysis)))
-
-                  analysis-fields #{"finish_reason" "usage_metadata" "model_version" "reasoning" "summary" "compartments"}
-                  result-fields (clojure.set/intersection requested-fields analysis-fields)
-                  result-data (when (and (:result analysis) (seq result-fields))
-                                (let [result (:result analysis)
-                                      text-json (try
-                                                  (let [text (get-in result [:candidates 0 :content :parts 0 :text])]
-                                                    (json/parse-string text true))
-                                                  (catch Exception e
-                                                    (println "Error parsing JSON:" e)
-                                                    nil)) ]
-                                  (when text-json
-                                    (select-keys text-json result-fields))))]
-              (merge base-response
-                     (when (seq result-data) {:result result-data})))
-            {:status 404 :body {:error "Analysis not found"}}) ))
-      {:status 400 :body {:error "Invalid image-id"}} )
-    (catch Exception e
-      (println "Error in get-image-analysis:" e)
-      {:status 500 :body {:error "Internal server error"}})))
-
-(defn get-image-analysis-v1 [request image-id]
-  (try
-    (println "Processing get-image-analysis for image-id:" image-id)
-    (if (valid-uuid? image-id)
-      (let [fields-str (get-in request [:query-params "fields"])
-            allowed-fields #{"status" "summary" "error_message" "analysis_type"
-                             "finish_reason" "usage_metadata" "model_version" "reasoning" "compartments"
-                             "image_id" "analysis_id"}
-            requested-fields (if (clojure.string/blank? fields-str)
-                               #{"status" "image_id" "analysis_id" "model_version" "analysis_type"}
-                               (set (map clojure.string/trim (clojure.string/split fields-str #","))))
-            invalid-fields (clojure.set/difference requested-fields allowed-fields)]
-        (println "Requested fields:" requested-fields "Invalid fields:" invalid-fields)
-        (if (seq invalid-fields)
-          (status (response {:error "Invalid fields requested" :invalid_fields invalid-fields}) 400)
-          (if-let [analysis (first (db/db-get-image-analyses image-id db/ds))]
-            (let [status (:status analysis)
-                  base-response (-> (select-keys analysis [:image_id :model_version :analysis_type :status :error_message])
-                                    (assoc :analysis_id (:id analysis)))
-                  analysis-fields #{"finish_reason" "usage_metadata" "model_version" "reasoning" "summary" "compartments"}
-                  result-fields (clojure.set/intersection requested-fields analysis-fields)
-                  field-mappings {"model_version" :modelVersion
-                                  "usage_metadata" :usageMetadata
-                                  "finish_reason" :finishReason
-                                  "summary" :summary
-                                  "reasoning" :reasoning
-                                  "compartments" :compartments}
-                  result-data (when (and (:result analysis) (seq result-fields))
-                                (let [result (:result analysis)
-                                      text-json (try
-                                                  (let [text (get-in result [:candidates 0 :content :parts 0 :text])]
-                                                    (json/parse-string text true))
-                                                  (catch Exception e
-                                                    (println "Error parsing text JSON for image ID:" image-id "Error:" (.getMessage e))
-                                                    {}))]
-                                  (into {} (map (fn [field]
-                                                  [(keyword field)
-                                                   (case field
-                                                     "compartments" (get-in text-json [:description :compartments])
-                                                     "finish_reason" (get-in result [:candidates 0 :finishReason])
-                                                     "summary" (:summary text-json)
-                                                     "reasoning" (:reasoning text-json)
-                                                     (get result (get field-mappings field (keyword field))))])
-                                                result-fields))))
-                  remaining-fields #{"status" "image_id" "analysis_id" "model_version" "analysis_type" "error_message"}
-                  response-data (merge
-                                 (select-keys base-response
-                                              (map keyword (clojure.set/intersection requested-fields remaining-fields)))
-                                 result-data)]
-              (cond
-                (= status "failed") (response (if (contains? requested-fields "error_message")
-                                                response-data
-                                                (dissoc response-data :error_message)))
-                (= status "completed") (response response-data)
-                :else (response response-data)))
-            (status (response {:error "Image analysis not found"}) 404)))
-        
-        (status (response {:error "Invalid UUID format" :id image-id}) 400)))
-    (catch Exception e
-      (println "Error in get-image-analysis for image ID:" image-id "Error:" (.getMessage e))
-      (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
-
-(defn get-image-analysis-v2 [request image-id]
-  (try
-    (println "Processing get-image-analysis for image-id:" image-id)
-    (println "Is UUID valid?" (valid-uuid? image-id))
-    (if (valid-uuid? image-id)
-      (let [fields-str (get-in request [:query-params "fields"])
-            allowed-fields #{"status" "summary" "error_message" "analysis_type"
-                             "finish_reason" "usage_metadata" "model_version" "reasoning" "compartments"
-                             "image_id" "analysis_id"}
-            requested-fields (if (clojure.string/blank? fields-str)
-                               #{"status" "image_id" "analysis_id" "model_version" "analysis_type"}
-                               (set (map clojure.string/trim (clojure.string/split fields-str #","))))
-            invalid-fields (clojure.set/difference requested-fields allowed-fields)]
-        (println "Requested fields:" requested-fields "Invalid fields:" invalid-fields)
-        (if (seq invalid-fields)
-          (do
-            (println "Returning 400 due to invalid fields")
-            (status (response {:error "Invalid fields requested" :invalid_fields invalid-fields}) 400))
-          (if-let [analysis (first (db/db-get-image-analyses image-id db/ds))]
-            (let [status (:status analysis)
-                  base-response (-> (select-keys analysis [:image_id :model_version :analysis_type :status :error_message])
-                                    (assoc :analysis_id (:id analysis)))
-                  analysis-fields #{"finish_reason" "usage_metadata" "model_version" "reasoning" "summary" "compartments"}
-                  result-fields (clojure.set/intersection requested-fields analysis-fields)
-                  field-mappings {"model_version" :modelVersion
-                                  "usage_metadata" :usageMetadata
-                                  "finish_reason" :finishReason
-                                  "summary" :summary
-                                  "reasoning" :reasoning
-                                  "compartments" :compartments}
-                  result-data (when (and (:result analysis) (seq result-fields))
-                                (let [result (:result analysis)
-                                      text-json (try
-                                                  (let [text (get-in result [:candidates 0 :content :parts 0 :text])]
-                                                    (cheshire.core/parse-string text true))
-                                                  (catch Exception e
-                                                    (println "Error parsing text JSON for image ID:" image-id "Error:" (.getMessage e))
-                                                    {}))]
-                                  (into {} (map (fn [field]
-                                                  [(keyword field)
-                                                   (case field
-                                                     "compartments" (get-in text-json [:description :compartments])
-                                                     "finish_reason" (get-in result [:candidates 0 :finishReason])
-                                                     "summary" (:summary text-json)
-                                                     "reasoning" (:reasoning text-json)
-                                                     (get result (get field-mappings field (keyword field))))])
-                                                result-fields))))
-                  remaining-fields #{"status" "image_id" "analysis_id" "model_version" "analysis_type" "error_message"}
-                  response-data (merge
-                                 (select-keys base-response
-                                              (map keyword (clojure.set/intersection requested-fields remaining-fields)))
-                                 result-data)]
-              (println "Returning analysis response for status:" status)
-              (cond
-                (= status "failed") (response (if (contains? requested-fields "error_message")
-                                                response-data
-                                                (dissoc response-data :error_message)))
-                (= status "completed") (response response-data)
-                :else (response response-data)))
-            (do
-              (println "No analysis found for image-id:" image-id)
-              (status (response {:error "Image analysis not found"}) 404)))))
-      (do
-        (println "Returning 400 due to invalid UUID:" image-id)
-        (status (response {:error "Invalid UUID format" :id image-id}) 400)))
-    (catch Exception e
-      (println "Error in get-image-analysis for image ID:" image-id "Error:" (.getMessage e))
-      (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
-
 (defn get-image-analysis [request image-id]
   (try
-    (println "Processing get-image-analysis for image-id:" image-id)
-    (println "Raw query-params:" (:query-params request))
-    (println "Is UUID valid?" (valid-uuid? image-id))
+;;    (println "Processing get-image-analysis for image-id:" image-id)
+;;    (println "Raw query-params:" (:query-params request))
+;;    (println "Is UUID valid?" (valid-uuid? image-id))
     (if (valid-uuid? image-id)
       (let [fields-str (get-in request [:query-params "fields"])
             allowed-fields #{"status" "summary" "error_message" "analysis_type"
@@ -537,6 +366,29 @@
     (let [analyses (db/db-get-image-analyses id)]
       (response (assoc image :analyses analyses)))
     (status (response {:error "Image not found"}) 404)))
+
+(defn get-images [request]
+  (try
+    (println "Processing get-images")
+    (let [fields-str (get-in request [:query-params "fields"])
+          allowed-fields #{"id" "image_data" "mime_type" "filename" "status" "created_at" "updated_at"}
+          requested-fields (if (clojure.string/blank? fields-str)
+                             #{"id" "filename" "mime_type" "status"}
+                             (set (map clojure.string/trim (clojure.string/split fields-str #","))))
+          invalid-fields (clojure.set/difference requested-fields allowed-fields)]
+      (println "Fields string:" fields-str)
+      (println "Requested fields:" requested-fields "Invalid fields:" invalid-fields)
+      (if (seq invalid-fields)
+        (do
+          (println "Returning 400 due to invalid fields")
+          (status (response {:error "Invalid fields requested" :invalid_fields invalid-fields}) 400))
+        (let [images (db/db-get-images requested-fields)]
+          (if (seq images)
+            (response images)
+            (status (response {:error "No images found"}) 404)))))
+    (catch Exception e
+      (println "Error in get-images:" (.getMessage e))
+      (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
 
 (defn get-items-for-location [location-id]
   (if (valid-uuid? location-id)
@@ -642,6 +494,11 @@
     (println "Matched route /images/:id/analyze with id:" id)
     (let [response (get-image-analysis request id)]
       (println "Handler response for id" id ":" response)
+      response))
+  (GET "/images" request
+    (println "Matched route /images")
+    (let [response (get-images request)]
+      (println "Handler response:" response)
       response)))
 
 (defroutes auth-routes
