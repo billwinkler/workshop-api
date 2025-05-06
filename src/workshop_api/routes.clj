@@ -292,9 +292,9 @@
 
 (defn get-image-analysis [request image-id]
   (try
-;;    (println "Processing get-image-analysis for image-id:" image-id)
-;;    (println "Raw query-params:" (:query-params request))
-;;    (println "Is UUID valid?" (valid-uuid? image-id))
+    (println "### Processing get-image-analysis for image-id:" image-id)
+    (println "### Raw query-params:" (:query-params request))
+    (println "### Is UUID valid?" (valid-uuid? image-id))
     (if (valid-uuid? image-id)
       (let [fields-str (get-in request [:query-params "fields"])
             allowed-fields #{"status" "summary" "error_message" "analysis_type"
@@ -304,11 +304,11 @@
                                #{"status" "image_id" "analysis_id" "model_version" "analysis_type"}
                                (set (map clojure.string/trim (clojure.string/split fields-str #","))))
             invalid-fields (clojure.set/difference requested-fields allowed-fields)]
-        (println "Fields string:" fields-str)
-        (println "Requested fields:" requested-fields "Invalid fields:" invalid-fields)
+        (println "### Fields string:" fields-str)
+        (println "### Requested fields:" requested-fields "Invalid fields:" invalid-fields)
         (if (seq invalid-fields)
           (do
-            (println "Returning 400 due to invalid fields")
+            (println "### Returning 400 due to invalid fields")
             (status (response {:error "Invalid fields requested" :invalid_fields invalid-fields}) 400))
           (if-let [analysis (first (db/db-get-image-analyses image-id db/ds))]
             (let [status (:status analysis)
@@ -344,7 +344,7 @@
                                  (select-keys base-response
                                               (map keyword (clojure.set/intersection requested-fields remaining-fields)))
                                  result-data)]
-              (println "Returning analysis response for status:" status)
+              (println "### Returning analysis response for status:" status)
               (cond
                 (= status "failed") (response (if (contains? requested-fields "error_message")
                                                 response-data
@@ -352,13 +352,13 @@
                 (= status "completed") (response response-data)
                 :else (response response-data)))
             (do
-              (println "No analysis found for image-id:" image-id)
+              (println "### No analysis found for image-id:" image-id)
               (status (response {:error "Image analysis not found"}) 404)))))
       (do
-        (println "Returning 400 due to invalid UUID:" image-id)
+        (println "### Returning 400 due to invalid UUID:" image-id)
         (status (response {:error "Invalid UUID format" :id image-id}) 400)))
     (catch Exception e
-      (println "Error in get-image-analysis for image ID:" image-id "Error:" (.getMessage e))
+      (println "### Error in get-image-analysis for image ID:" image-id "Error:" (.getMessage e))
       (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
 
 (defn get-image [id]
