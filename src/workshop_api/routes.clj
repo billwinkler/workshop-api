@@ -148,7 +148,6 @@
     (status (response {:error "Invalid UUID format" :data {:item_id item-id :image_id image-id}}) 400)))
 
 (defn delete-location-image [location-id image-id]
-  (println "###delete-location-image###: location-id:" location-id "image-id:" image-id)  
   (if (and (valid-uuid? location-id) (valid-uuid? image-id))
     (if (db/db-get-location location-id)
       (if (db/db-get-image image-id)
@@ -621,14 +620,10 @@
   (POST "/images" request (add-image request))
   (POST "/images/:id/analyze" [id :as request] (analyze-image request id))
   (POST "/item-images" request (add-item-image request))
-  (DELETE "/item-images/:item_id/:image_id" [item-id image-id] (delete-item-image item-id image-id))
+  (DELETE "/item-images/:item_id/:image_id" [item_id image_id]
+    (delete-item-image item_id image_id))
   (POST "/location-images" request (add-location-image request))
-  (DELETE "/location-images/:location_id/:image_id" [location_id image_id :as request]
-    (println "### Handling DELETE /api/location-images/:location_id/:image_id")
-    (println "### Request URI:" (:uri request))
-    (println "### Route params:" (:route-params request))
-    (println "### All params:" (:params request))
-    (println "### location_id:" location_id "image_id:" image_id)
+  (DELETE "/location-images/:location_id/:image_id" [location_id image_id]
     (delete-location-image location_id image_id))
   (GET "/item-images" request (get-item-images request))
   (GET "/location-images" request (get-location-images request)))
