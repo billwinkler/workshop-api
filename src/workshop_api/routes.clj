@@ -468,7 +468,11 @@
   (DELETE "/locations/:id" [id] (delete-location id))
   (POST "/items" request (add-item request))
   (PATCH "/items/:id" [id :as request] (update-item request id))
-  (DELETE "/items/:id" [id] (delete-item id))
+  (DELETE "/items/:id" [id]
+    (println "### Matched route DELETE /images/:id with id:" id)
+    (let [response (delete-item id)]
+      (println "### Handler response for id" id ":" response)
+      response))
   (POST "/images" request (add-image request))
   (POST "/images/:id/analyze" [id :as request] (analyze-image request id))
   (POST "/item-images" request (add-item-image request))
