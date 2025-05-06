@@ -3,6 +3,7 @@
             [next.jdbc.sql :as sql]
             [next.jdbc.result-set :as rs]
             [clojure.string :as str]
+            [clojure.set :as set]
             [cheshire.core :as json]
             [workshop-api.common :refer [valid-uuid?]])
   (:import [java.sql Timestamp]
@@ -138,7 +139,7 @@
   ([fields conn]
    (let [ds (or conn ds)
          allowed-fields #{"id" "image_data" "mime_type" "filename" "status" "created_at" "updated_at"}
-         valid-fields (clojure.set/intersection fields allowed-fields)
+         valid-fields (set/intersection fields allowed-fields)
          selected-fields (if (empty? valid-fields)
                            #{"id" "filename" "mime_type" "status"}
                            valid-fields)
