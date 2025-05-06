@@ -84,7 +84,7 @@
 (defn delete-item [id]
   (if-let [item (db/db-get-item id)]
     (do
-      (db/db-delete-item)
+      (db/db-delete-item id)
       (response {:status "success"}))
     (status (response {:error "Item not found"}) 404)))
 
