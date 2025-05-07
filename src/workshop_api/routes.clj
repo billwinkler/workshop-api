@@ -67,18 +67,24 @@
 
 (defn update-item [request id]
   (let [item (db/keywordize-keys (:body request))]
+    (println "### Validating partial item:" item "Result:" (util/valid-partial-item? item))
+    (when (instance? java.io.InputStream (:body request))
+      (try
+        (.close (:body request))
+        (catch Exception e
+          (println "Error closing request body stream:" (.getMessage e)))))
     (try
       (if (util/valid-partial-item? item)
         (if-let [existing-item (db/db-get-item id)]
           (if-let [updated-item (db/db-update-item id item)]
             (response updated-item)
             (do
-              (println "Failed to update item in database for ID:" id "Item:" item)
+              (println "### Failed to update item in database for ID:" id "Item:" item)
               (status (response {:error "No fields to update or failed to update item"}) 400)))
           (status (response {:error "Item not found"}) 404))
         (status (response {:error "Invalid item format" :data item}) 400))
       (catch Exception e
-        (println "Error in update-item for ID:" id "Error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
+        (println "### Error in update-item for ID:" id "Error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
         (status (response {:error "Internal server error" :message (.getMessage e)}) 500)))))
 
 (defn delete-item [id]
@@ -467,7 +473,11 @@
       response))
   (DELETE "/locations/:id" [id] (delete-location id))
   (POST "/items" request (add-item request))
-  (PATCH "/items/:id" [id :as request] (update-item request id))
+  (PATCH "/items/:id" [id :as request]
+    (println "### Matched route PATCH /items/:id" id)
+    (let [response (update-item request id)]
+      (println "### Handler response for id" id ":" response)
+      response))
   (DELETE "/items/:id" [id]
     (println "### Matched route DELETE /images/:id with id:" id)
     (let [response (delete-item id)]
