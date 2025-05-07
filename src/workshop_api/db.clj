@@ -166,15 +166,44 @@
 
 (defn db-update-item [id item]
   (let [now (current-timestamp)
-        updateable-fields (select-keys item [:name :category :supplier :supplier_part_no :supplier_item_url :description :notes :quantity :location_id :acquisition_date])
+        updateable-fields (select-keys item [:name :category :supplier :supplier_part_no
+                                             :supplier_item_url :description :notes :quantity
+                                             :location_id :acquisition_date])
         updateable-fields (assoc updateable-fields :updated_at now)]
+        (println "### Attempting to update item ID:" id "with fields:" updateable-fields)
+        (println "### Valid location_id:" (valid-uuid? (:location_id updateable-fields)))
+        (if (empty? (dissoc updateable-fields :updated_at))
+          (do
+            (println "### No fields to update for item ID:" id)
+            nil)
+          (let [sql (str "UPDATE items SET "
+                         (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
+                         " WHERE id = ?::uuid")
+                params (concat (vals updateable-fields) [id])]
+            (jdbc/execute-one! ds
+                               (into [sql] params)
+                               {:return-keys true :builder-fn rs/as-unqualified-lower-maps})))))
+
+(defn db-update-item [id item]
+  (let [now (current-timestamp)
+        updateable-fields (select-keys item [:name :category :supplier :supplier_part_no
+                                             :supplier_item_url :description :notes :quantity
+                                             :location_id :acquisition_date])
+        updateable-fields (assoc updateable-fields :updated_at now)]
+    (println "### Attempting to update item ID:" id "with fields:" updateable-fields)
+    (println "### Valid location_id:" (valid-uuid? (:location_id updateable-fields)))
     (if (empty? (dissoc updateable-fields :updated_at))
       (do
-        (println "No fields to update for item ID:" id)
+        (println "### No fields to update for item ID:" id)
         nil)
       (let [sql (str "UPDATE items SET "
-                     (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
+                     (str/join ", " (map (fn [k]
+                                           (if (= k :location_id)
+                                             "location_id = ?::uuid"
+                                             (str (name k) " = ?")))
+                                         (keys updateable-fields)))
                      " WHERE id = ?::uuid")
+            _ (println "### sql: " sql)
             params (concat (vals updateable-fields) [id])]
         (jdbc/execute-one! ds
                            (into [sql] params)
