@@ -19,7 +19,13 @@
                  [org.clojure/core.async "1.6.681"]
                  [clj-http "3.12.0"]
                  [buddy/buddy-auth "3.0.323"]
-                 [buddy/buddy-hashers "1.8.158"]]
+                 [buddy/buddy-hashers "1.8.158"]
+                 [com.google.zxing/core "3.5.2"] ;; QR code generation
+                 [com.google.zxing/javase "3.5.2"]
+                 [net.glxn/qrgen "1.4"]
+                 [com.github.kenglxn.QRGen/javase "2.6.0"]
+                 [com.github.kenglxn.QRGen/core "2.6.0"]]
+  :repositories  [["jitpack" "https://jitpack.io"]] ;; Add JitPack repository for QR code generation
   :main ^:skip-aot workshop-api.core
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all

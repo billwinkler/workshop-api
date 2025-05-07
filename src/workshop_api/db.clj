@@ -15,9 +15,8 @@
       {:dbtype "postgresql" :dbname "workshop_inventory_test" :host "localhost" :user "billwinkler" :password (System/getenv "DB_PASSWORD")}
       {:dbtype "postgresql" :dbname "workshop_inventory" :host "localhost" :user "billwinkler" :password (System/getenv "DB_PASSWORD")})))
 
-;;(def ds (jdbc/get-datasource {:dbtype "postgresql" :dbname "workshop_inventory" :host "localhost" :user "billwinkler" :password (System/getenv "DB_PASSWORD")}))
-
 (def ds (jdbc/get-datasource (get-db-spec)))
+;;(def ds (jdbc/get-datasource {:dbtype "postgresql" :dbname "workshop_inventory" :host "localhost" :user "billwinkler" :password (System/getenv "DB_PASSWORD")}))
 
 (defn current-timestamp [] (Timestamp/from (Instant/now)))
 
@@ -382,8 +381,8 @@
                             ["SELECT i.*, l.name AS location_name, l.parent_id
                               FROM items i
                               JOIN locations l ON i.location_id = l.id
-                              WHERE i.name ILIKE ? OR i.category ILIKE ? OR i.supplier ILIKE ? OR i.description ILIKE ? OR i.notes ILIKE ?"
-                             search-term search-term search-term search-term search-term]
+                              WHERE i.name ILIKE ? OR i.category ILIKE ? OR i.supplier ILIKE ? OR i.description ILIKE ? OR i.notes ILIKE ? OR l.label ILIKE ?"
+                             search-term search-term search-term search-term search-term search-term]
                             {:builder-fn rs/as-unqualified-lower-maps})]
     (map #(assoc % :location_path (get-location-path (:location_id %))) items)))
 
