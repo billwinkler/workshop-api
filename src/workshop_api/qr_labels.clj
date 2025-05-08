@@ -43,14 +43,14 @@
 (def templates {:lb-23-default {:typeface "Roboto"
                                 :heading-size 40
                                 :text-size 25
-                                :line-chrs 18
+                                :line-chrs 22
                                 :text-lines 4
                                 :line-space 22
                                 :label-x 202
                                 :label-y 202
-                                :coords {:qr-x 0 :qr-y 0
-                                         :hd-x 100 :hd-y 70
-                                         :tx-x 13 :tx-y 120}}
+                                :coords {:qr-x 3 :qr-y 0
+                                         :hd-x 115 :hd-y 70
+                                         :tx-x 3 :tx-y 123}}
                 :lb-23-20point {:typeface "Roboto"
                                 :heading-size 40
                                 :text-size 20
@@ -74,14 +74,14 @@
                                          :hd-x 100 :hd-y 70
                                          :tx-x 13 :tx-y 120}}})
 
-;; expects a map as input with fields: :id, :label, :description
+;; expects a map as input with fields: :label, :description
 (defn generate-label [data & {:keys [template output-file]
                               :or {template :lb-23-default
                                    output-file "qr-image.png"}}]
   (let [{:keys [typeface heading-size text-size text-lines line-space
                 label-x label-y line-chrs coords]} (get templates template)
         ;; use the location id to construct the qr code url
-        url (str api-base "/api/inventory/location/" (:id data))
+        url (str api-base "/location/" (:label data))
         qr-img (qr-img url)
         img (BufferedImage. label-x label-y BufferedImage/TYPE_INT_ARGB)
         g (.createGraphics img)
