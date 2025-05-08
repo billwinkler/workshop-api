@@ -261,10 +261,22 @@
         nil)
       :else
       (let [merged-fields (merge (select-keys existing-loc required-fields) updateable-fields)
-            sql "UPDATE locations SET label = ?, name = ?, type = ?, description = ?, parent_id = ?::uuid, area = ?, updated_at = ? WHERE id = ?::uuid"
-            params [(:label merged-fields) (:name merged-fields) (:type merged-fields)
-                    (:description merged-fields) (:parent_id merged-fields) (:area merged-fields)
-                    now id]]
+            ;; Define fields for SET clauses, ensuring parent_id comes first if present
+            set-fields (concat
+                         (when (:parent_id updateable-fields) [:parent_id])
+                         (filter #(not= % :parent_id) (keys (dissoc updateable-fields :updated_at)))
+                         [:updated_at])
+            ;; Build SET clauses
+            set-clauses (for [field set-fields]
+                          (if (= field :parent_id)
+                            "parent_id = ?::uuid"
+                            (str (name field) " = ?")))
+            sql (str "UPDATE locations SET " (str/join ", " set-clauses) " WHERE id = ?::uuid")
+            ;; Build params list matching the SET clauses
+            params (vec (concat
+                          (for [field set-fields]
+                            (get merged-fields field))
+                          [id]))]
         (println "Executing update query for location ID:" id "SQL:" sql "Params:" params)
         (try
           (let [result (jdbc/execute-one! ds
@@ -275,8 +287,6 @@
           (catch Exception e
             (println "Failed to update location ID:" id "Error:" (.getMessage e))
             (throw (ex-info "Database update failed" {:error (.getMessage e)}))))))))
-
-
 
 (defn db-get-location-by-name [name]
   (jdbc/execute-one! ds
