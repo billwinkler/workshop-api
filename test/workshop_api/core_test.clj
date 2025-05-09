@@ -34,7 +34,7 @@
 
 ;; Verify database schema
 (defn verify-schema [ds]
-  (let [tables [:locations :images :items :item_images :location_images :users :image_analyses]
+  (let [tables [:locations :images :items :item_images :location_images :users :image_analyses :location_types :location_areas :item_categories]
         results (map (fn [table]
                        (jdbc/execute-one! ds
                                           [(str "SELECT EXISTS (
@@ -54,12 +54,35 @@
     (catch Exception e
       (println "Test database setup failed:" (.getMessage e))
       (throw e)))
-  (with-redefs [workshop-api.gemini-describe/call-gemini-api mock-gemini-api]
-    (f))
   (try
-    (jdbc/execute! ds ["TRUNCATE TABLE item_images, location_images, items, images, image_analyses, locations, users RESTART IDENTITY"])
+    (jdbc/execute! ds ["TRUNCATE TABLE item_images, location_images, items, images, image_analyses, locations, users, location_types, location_areas, item_categories RESTART IDENTITY"])
+    (println "Database tables truncated successfully")
+    ;; Insert seed data for location_types, location_areas, and item_categories
+    (jdbc/execute! ds
+                   ["INSERT INTO location_types (name, description, created_at, updated_at)
+                     VALUES ('Warehouse', 'Large storage facility', NOW(), NOW()),
+                            ('Office', 'Administrative workspace', NOW(), NOW()),
+                            ('Shed', 'Tool shed', NOW(), NOW()),
+                            ('Storage Room', 'Small storage area', NOW(), NOW())"])
+    (jdbc/execute! ds
+                   ["INSERT INTO location_areas (name, description, created_at, updated_at)
+                     VALUES ('North Wing', 'North section of building', NOW(), NOW()),
+                            ('Basement', 'Underground storage', NOW(), NOW()),
+                            ('Backyard', 'Rear of building', NOW(), NOW()),
+                            ('Floor 1', 'First floor area', NOW(), NOW())"])
+    (jdbc/execute! ds
+                   ["INSERT INTO item_categories (name, description, created_at, updated_at)
+                     VALUES ('Hand Tool', 'Manual tools', NOW(), NOW()),
+                            ('Power Tool', 'Electric tools', NOW(), NOW()),
+                            ('Material', 'Construction materials', NOW(), NOW()),
+                            ('Equipment', 'Heavy equipment', NOW(), NOW())"])
+    (println "Seed data inserted for location_types, location_areas, and item_categories")
+    (verify-schema ds)
+    (with-redefs [workshop-api.gemini-describe/call-gemini-api mock-gemini-api]
+      (f))
     (catch Exception e
-      (println "Failed to truncate tables:" (.getMessage e)))))
+      (println "Test database setup or truncation failed:" (.getMessage e))
+      (throw e))))
 
 (use-fixtures :each db-fixture)
 
@@ -128,19 +151,25 @@
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
           location-id (generate-id)
+          location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
+          location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
-                    :type "Shed"
-                    :area "Backyard"
+                    :location_type_id (:id location-type)
+                    :location_area_id (:id location-area)
                     :description "Storage for tools"
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
           _ (db-add-location location)
+          category (first (jdbc/execute! ds ["SELECT id FROM item_categories WHERE name = ?" "Hand Tool"]
+                                        {:builder-fn rs/as-unqualified-lower-maps}))
           item {:name "Screwdriver"
                 :description "Phillips head screwdriver"
                 :location_id location-id
-                :category "Tool"
+                :item_category_id (:id category)
                 :quantity 5}
           request (-> (mock/request :post "/api/items")
                       (mock/json-body item)
@@ -149,8 +178,9 @@
       (let [response-body (try (json/parse-string (:body response) true)
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
-                                {}))
-            db-item (find-by-keys-unqualified ds :items {:name "Screwdriver"})]
+                                {}))]
+        (println "Response status:" (:status response))
+        (println "Response body:" response-body)
         (is (= 200 (:status response)) "Expected 200 status")
         (is (= "Screwdriver" (:name response-body)) "Expected correct name in response")
         (is (or (nil? (:id response-body))
@@ -158,23 +188,29 @@
             "Expected valid UUID in response")
         (is (= location-id (:location_id response-body)) "Expected correct location_id in response")
         (is (= 5 (:quantity response-body)) "Expected correct quantity in response")
-        (is (= 1 (count db-item)) "Expected one item in database")
-        (is (= "Screwdriver" (:name (first db-item))) "Expected correct name in database"))))
+        (is (= 1 (count (find-by-keys-unqualified ds :items {:name "Screwdriver"}))) "Expected one item in database")
+        (is (= "Screwdriver" (:name (first (find-by-keys-unqualified ds :items {:name "Screwdriver"})))) "Expected correct name in database"))))
   (testing "Adding a valid item without JWT"
     (let [location-id (generate-id)
+          location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
+          location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
-                    :type "Shed"
-                    :area "Backyard"
+                    :location_type_id (:id location-type)
+                    :location_area_id (:id location-area)
                     :description "Storage for tools"
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
           _ (db-add-location location)
+          category (first (jdbc/execute! ds ["SELECT id FROM item_categories WHERE name = ?" "Hand Tool"]
+                                        {:builder-fn rs/as-unqualified-lower-maps}))
           item {:name "Screwdriver"
                 :description "Phillips head screwdriver"
                 :location_id location-id
-                :category "Tool"
+                :item_category_id (:id category)
                 :quantity 5}
           request (-> (mock/request :post "/api/items")
                       (mock/json-body item))
@@ -183,6 +219,8 @@
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
                                 {}))]
+        (println "Response status (no JWT):" (:status response))
+        (println "Response body (no JWT):" response-body)
         (is (= 401 (:status response)) "Expected 401 status")
         (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))))
 
@@ -218,7 +256,6 @@
                                 {}))]
         (is (= 401 (:status response)) "Expected 401 status")
         (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))))
-
 (deftest test-add-item-non-existent-location
   (testing "Adding an item with non-existent location_id with JWT"
     (let [user {:id (generate-id) :username "testuser"}
@@ -336,11 +373,15 @@
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
           location-id (generate-id)
+          location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
+          location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
-                    :type "Shed"
-                    :area "Backyard"
+                    :location_type_id (:id location-type)
+                    :location_area_id (:id location-area)
                     :description "Storage for tools"
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
@@ -382,11 +423,15 @@
         (is (= image-id (str (:image_id (first db-item-image)))) "Expected correct image_id in database"))))
   (testing "Adding a valid item-image link without JWT"
     (let [location-id (generate-id)
+          location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
+          location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
-                    :type "Shed"
-                    :area "Backyard"
+                    :location_type_id (:id location-type)
+                    :location_area_id (:id location-area)
                     :description "Storage for tools"
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
@@ -470,11 +515,15 @@
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
           location-id (generate-id)
+          location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
+          location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
-                    :type "Shed"
-                    :area "Backyard"
+                    :location_type_id (:id location-type)
+                    :location_area_id (:id location-area)
                     :description "Storage for tools"
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
@@ -510,11 +559,15 @@
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
           location-id (generate-id)
+          location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
+          location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
-                    :type "Shed"
-                    :area "Backyard"
+                    :location_type_id (:id location-type)
+                    :location_area_id (:id location-area)
                     :description "Storage for tools"
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
@@ -595,11 +648,15 @@
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
           location-id (generate-id)
+          location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
+          location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
-                    :type "Shed"
-                    :area "Backyard"
+                    :location_type_id (:id location-type)
+                    :location_area_id (:id location-area)
                     :description "Storage for tools"
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
@@ -634,11 +691,15 @@
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
           location-id (generate-id)
+          location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
+          location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
-                    :type "Shed"
-                    :area "Backyard"
+                    :location_type_id (:id location-type)
+                    :location_area_id (:id location-area)
                     :description "Storage for tools"
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
@@ -724,11 +785,15 @@
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
           location-id (generate-id)
+          location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
+          location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
-                    :type "Shed"
-                    :area "Backyard"
+                    :location_type_id (:id location-type)
+                    :location_area_id (:id location-area)
                     :description "Storage for tools"
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
@@ -797,7 +862,6 @@
       (is (= "No images found for location" (:error response-body)) "Expected error message"))))
 
 (deftest test-analyze-image
-  
   (testing "Analyzing an image without JWT"
     (db-fixture
      (fn []
@@ -868,11 +932,15 @@
 (deftest test-get-items-for-location
   (testing "Getting items for a valid location_id"
     (let [location-id (generate-id)
+          location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
+          location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
+                                             {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
-                    :type "Shed"
-                    :area "Backyard"
+                    :location_type_id (:id location-type)
+                    :location_area_id (:id location-area)
                     :description "Storage for tools"
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
