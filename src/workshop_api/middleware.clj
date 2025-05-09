@@ -29,6 +29,7 @@
 
 (defn wrap-error-handling [handler]
   (fn [request]
+    (println ">>>>wrap-error request:" request)
     (try
       (handler request)
       (catch clojure.lang.ExceptionInfo e

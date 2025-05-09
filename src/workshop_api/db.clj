@@ -195,6 +195,7 @@
 
 ;; --- Modified Location Functions ---
 (defn db-add-location [loc]
+;;  (println "Adding location with input:" loc)
   (try
     (jdbc/with-transaction [tx ds]
       ;; Validate required fields and foreign keys
@@ -227,7 +228,7 @@
                                       LEFT JOIN location_areas la ON l.location_area_id = la.id
                                       WHERE l.id = ?::uuid" id]
                                     {:builder-fn rs/as-unqualified-lower-maps})]
-      (println "Location fetch result:" result)
+;;      (println "Location fetch result:" result)
       result)
     (catch Exception e
       (println "Error fetching location ID:" id "Error:" (.getMessage e))
@@ -251,13 +252,56 @@
                                  {:builder-fn rs/as-unqualified-lower-maps})]
     (map #(assoc % :location_path (get-location-path (:id %))) locations)))
 
+(defn db-get-location-type [id]
+  (println "Fetching location type with ID:" id "type:" (type id))
+  (try
+    (let [conn (jdbc/get-connection ds)
+          stmt (.prepareStatement conn "SELECT * FROM location_types WHERE id = ?")]
+      (.setInt stmt 1 (int id))
+      (let [rs (.executeQuery stmt)
+            result (if (.next rs)
+                     (next.jdbc.result-set/as-unqualified-lower-maps rs {})
+                     nil)]
+        (.close rs)
+        (.close stmt)
+        (.close conn)
+        result))
+    (catch Exception e
+      (println "Failed to fetch location type ID:" id "Error:" (.getMessage e))
+      (.printStackTrace e System/out)
+      nil)))
+
+(defn db-get-location-area [id]
+  (println "Fetching location area with ID:" id "type:" (type id))
+  (try
+    (let [conn (jdbc/get-connection ds)
+          stmt (.prepareStatement conn "SELECT * FROM location_areas WHERE id = ?")]
+      (.setInt stmt 1 (int id))
+      (let [rs (.executeQuery stmt)
+            result (if (.next rs)
+                     (next.jdbc.result-set/as-unqualified-lower-maps rs {})
+                     nil)]
+        (.close rs)
+        (.close stmt)
+        (.close conn)
+        result))
+    (catch Exception e
+      (println "Failed to fetch location area ID:" id "Error:" (.getMessage e))
+      (.printStackTrace e System/out)
+      nil)))
+
 (defn db-update-location [id loc]
+  (println "this is version 0.7")
   (let [now (current-timestamp)
         updateable-fields (select-keys loc [:label :name :location_type_id :description :parent_id :location_area_id])
         updateable-fields (assoc updateable-fields :updated_at now)
         required-fields [:name :location_type_id :location_area_id]
         existing-loc (db-get-location id)]
     (println "Attempting to update location ID:" id "with fields:" updateable-fields)
+    (println ">>fields:")
+    (println "   loc-type:" (:location_type_id updateable-fields) "type:" (type (:location_type_id updateable-fields)))
+    (println "   loc-area:" (:location_area_id updateable-fields) "type:" (type (:location_area_id updateable-fields)))
+    (println "   parent_id:" (:parent_id updateable-fields) "type:" (type (:parent_id updateable-fields)))
     (cond
       (nil? existing-loc)
       (do
@@ -267,7 +311,7 @@
       (do
         (println "No fields to update for location ID:" id)
         nil)
-      (some #(and (contains? updateable-fields %) (or (nil? (get updateable-fields %)) (str/blank? (get updateable-fields %)))) required-fields)
+      (some #(and (contains? updateable-fields %) (or (nil? (get updateable-fields %)) (and (string? (get updateable-fields %)) (str/blank? (get updateable-fields %))))) required-fields)
       (do
         (println "Invalid or missing required field for location ID:" id "Fields:" updateable-fields)
         nil)
@@ -278,35 +322,51 @@
         (println "Invalid or non-existent parent_id for location ID:" id "parent_id:" (:parent_id updateable-fields))
         nil)
       (and (:location_type_id updateable-fields)
-           (nil? (db-get-location-type (:location_type_id updateable-fields))))
+           (nil? (db-get-location-type (int (:location_type_id updateable-fields)))))
+      (do
+        (println "Invalid location_type_id for location ID:" id "location_type_id:" (:location_type_id updateable-fields))
+        nil)
+      (and (:location_type_id updateable-fields)
+           (nil? (db-get-location-type (int (:location_type_id updateable-fields)))))
       (do
         (println "Invalid location_type_id for location ID:" id "location_type_id:" (:location_type_id updateable-fields))
         nil)
       (and (:location_area_id updateable-fields)
-           (nil? (db-get-location-area (:location_area_id updateable-fields))))
+           (nil? (db-get-location-area (int (:location_area_id updateable-fields)))))
       (do
         (println "Invalid location_area_id for location ID:" id "location_area_id:" (:location_area_id updateable-fields))
         nil)
       :else
       (let [merged-fields (merge (select-keys existing-loc required-fields) updateable-fields)
-            set-fields (concat
-                         (when (:parent_id updateable-fields) [:parent_id])
-                         (when (:location_type_id updateable-fields) [:location_type_id])
-                         (when (:location_area_id updateable-fields) [:location_area_id])
-                         (filter #(not= % :parent_id :location_type_id :location_area_id) (keys (dissoc updateable-fields :updated_at)))
-                         [:updated_at])
-            set-clauses (for [field set-fields]
-                          (cond
-                            (= field :parent_id) "parent_id = ?::uuid"
-                            (= field :location_type_id) "location_type_id = ?"
-                            (= field :location_area_id) "location_area_id = ?"
-                            :else (str (name field) " = ?")))
+            set-fields (remove nil? (concat
+                                     (when (:label updateable-fields) [:label])
+                                     (when (:name updateable-fields) [:name])
+                                     (when (:location_type_id updateable-fields) [:location_type_id])
+                                     (when (:description updateable-fields) [:description])
+                                     (when (some? (:parent_id updateable-fields)) [:parent_id])
+                                     (when (:location_area_id updateable-fields) [:location_area_id])
+                                     [:updated_at]))
+            set-clauses (map (fn [field]
+                               (cond
+                                 (= field :parent_id) "parent_id = ?::uuid"
+                                 (= field :location_type_id) "location_type_id = ?"
+                                 (= field :location_area_id) "location_area_id = ?"
+                                 :else (str (name field) " = ?")))
+                             set-fields)
             sql (str "UPDATE locations SET " (str/join ", " set-clauses) " WHERE id = ?::uuid")
             params (vec (concat
-                          (for [field set-fields]
-                            (get merged-fields field))
-                          [id]))]
-        (println "Executing update query for location ID:" id "SQL:" sql "Params:" params)
+                         (map (fn [field]
+                                (let [value (get merged-fields field)]
+                                  (cond
+                                    (= field :location_type_id) (int value)
+                                    (= field :location_area_id) (int value)
+                                    (= field :parent_id) (when value (str value))
+                                    :else value)))
+                              set-fields)
+                         [id]))]
+        (println "Generated SQL:" sql)
+        (println "Parameters:" params)
+        (println "Parameter types:" (map type params))
         (try
           (let [result (jdbc/execute-one! ds
                                           (into [sql] params)
@@ -315,8 +375,9 @@
             result)
           (catch Exception e
             (println "Failed to update location ID:" id "Error:" (.getMessage e))
+            (println "Full stack trace:")
+            (.printStackTrace e System/out)
             (throw (ex-info "Database update failed" {:error (.getMessage e)}))))))))
-
 ;; --- Modified Item Functions ---
 (defn db-add-item [item]
   (try

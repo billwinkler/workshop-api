@@ -9,11 +9,14 @@
 
 (defn valid-location? [loc]
   (let [result (and (string? (:name loc))
-                    (string? (:type loc))
-                    (string? (:area loc))
+                    (not (str/blank? (:name loc)))
+                    (integer? (:location_type_id loc))
+                    (some? (db/db-get-location-type (:location_type_id loc)))
+                    (integer? (:location_area_id loc))
+                    (some? (db/db-get-location-area (:location_area_id loc)))
                     (or (nil? (:label loc)) (string? (:label loc)))
                     (or (nil? (:description loc)) (string? (:description loc)))
-                    (or (nil? (:parent_id loc)) (string? (:parent_id loc))))]
+                    (or (nil? (:parent_id loc)) (string? (:parent_id loc)) (valid-uuid? (:parent_id loc))))]
     result))
 
 (defn valid-item? [item]
@@ -42,33 +45,35 @@
        (or (nil? (:notes item)) (string? (:notes item)))
        (or (nil? (:acquisition_date item)) (string? (:acquisition_date item)))))
 
- (defn valid-partial-location? [loc]
-   (and (map? loc)
-       (every? #(or (nil? (loc %)) (not (str/blank? (loc %)))) [:name :type :area])
-       (or (nil? (:label loc)) (string? (:label loc))) ; Allow empty label
-       (or (nil? (:description loc)) (string? (:description loc)))
-       (or (nil? (:parent_id loc)) (valid-uuid? (:parent_id loc)))
-       (or (nil? (:parent_id loc))
-           (and (valid-uuid? (:parent_id loc))
-                (db/db-get-location (:parent_id loc))))))
-
 (defn valid-partial-location? [loc]
-  (println "Validating location:" loc)
+  (println "Validating partial location:" loc)
   (let [is-map (map? loc)
-        name-type-area (every? #(or (nil? (loc %)) (not (str/blank? (loc %)))) [:name :type :area])
+        name-valid (or (nil? (:name loc)) (and (string? (:name loc)) (not (str/blank? (:name loc)))))
+        location-type-valid (or (nil? (:location_type_id loc))
+                               (and (integer? (:location_type_id loc))
+                                    (some? (db/db-get-location-type (:location_type_id loc)))))
+        location-area-valid (or (nil? (:location_area_id loc))
+                               (and (integer? (:location_area_id loc))
+                                    (some? (db/db-get-location-area (:location_area_id loc)))))
         label-valid (or (nil? (:label loc)) (string? (:label loc)))
         desc-valid (or (nil? (:description loc)) (string? (:description loc)))
         parent-uuid (or (nil? (:parent_id loc)) (valid-uuid? (:parent_id loc)))
-        parent-exists (or (nil? (:parent_id loc)) (and (valid-uuid? (:parent_id loc)) (db/db-get-location (:parent_id loc))))
-        result (and is-map name-type-area label-valid desc-valid parent-uuid parent-exists)]
-    (println "Validation checks:")
-    (println "  map?:" is-map)
-    (println "  name,type,area non-blank?:" name-type-area)
-    (println "  label nil or string?:" label-valid)
-    (println "  description nil or string?:" desc-valid)
-    (println "  parent_id nil or valid UUID?:" parent-uuid)
-    (println "  parent_id exists?:" parent-exists)
-    (println "  Final result:" result)
+        parent-exists (or (nil? (:parent_id loc))
+                          (and (valid-uuid? (:parent_id loc))
+                               (some? (db/db-get-location (:parent_id loc)))))
+        result (and is-map name-valid location-type-valid location-area-valid
+                    label-valid desc-valid parent-uuid parent-exists)]
+    (when (not result)
+      (println "Validation checks:")
+      (println "  map?:" is-map)
+      (println "  name nil or non-blank string?:" name-valid)
+      (println "  location_type_id nil or valid?:" location-type-valid)
+      (println "  location_area_id nil or valid?:" location-area-valid)
+      (println "  label nil or string?:" label-valid)
+      (println "  description nil or string?:" desc-valid)
+      (println "  parent_id nil or valid UUID?:" parent-uuid)
+      (println "  parent_id exists?:" parent-exists)
+      (println "  Final result:" result))
     result))
 
 (defn valid-image? [image]

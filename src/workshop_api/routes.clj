@@ -5,12 +5,14 @@
             [workshop-api.db :as db]
             [workshop-api.util :as util]
             [workshop-api.common :refer [valid-uuid?]]
+            [workshop-api.middleware :refer [wrap-auth]]
             [workshop-api.auth :as auth]
             [buddy.auth :refer [authenticated? throw-unauthorized]]
             [cheshire.core :as json]))
 
 (defn add-location [request]
   (let [loc (db/keywordize-keys (:body request))]
+    (println "in routes/add-location, body:" request)
     (if (util/valid-location? loc)
       (let [new-loc (util/prepare-location loc)]
         (db/db-add-location new-loc)
@@ -18,7 +20,9 @@
       (status (response {:error "Invalid location format" :data loc}) 400))))
 
 (defn update-location [request id]
-  (let [loc (db/keywordize-keys (:body request))]
+  (let [loc (-> (db/keywordize-keys (:body request))
+                (update :location_type_id #(cond (string? %) (Integer/parseInt %) (number? %) (int %) :else %))
+                (update :location_area_id #(cond (string? %) (Integer/parseInt %) (number? %) (int %) :else %)))]
     (println "Validating partial location:" loc "Result:" (util/valid-partial-location? loc))
     (when (instance? java.io.InputStream (:body request))
       (try
@@ -27,9 +31,15 @@
           (println "Error closing request body stream:" (.getMessage e)))))
     (if (util/valid-partial-location? loc)
       (if-let [existing-loc (db/db-get-location id)]
-        (if-let [updated-loc (db/db-update-location id loc)]
-          (response updated-loc)
-          (status (response {:error "Invalid location format" :data loc}) 400))
+        (try
+          (if-let [updated-loc (db/db-update-location id loc)]
+            (response updated-loc)
+            (do
+              (println "Failed to update location in database for ID:" id "Location:" loc)
+              (status (response {:error "No fields to update or failed to update location"}) 400)))
+          (catch Exception e
+            (println "Error updating location ID:" id "Error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
+            (status (response {:error "Internal server error" :message (.getMessage e)}) 500)))
         (status (response {:error "Location not found"}) 404))
       (status (response {:error "Invalid location format" :data loc}) 400))))
 
@@ -452,13 +462,6 @@
                 []
                 (db/db-search-items query))]
     (response items)))
-
-(defn wrap-auth [handler]
-  (fn [request]
-    (if (authenticated? request)
-      (handler request)
-      (do (println "in wrap-auth, throwing unauthorized:")
-          (throw-unauthorized {:message "Unauthorized"})))))
 
 (defroutes test-routes
   (POST "/test" request
