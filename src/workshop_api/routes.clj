@@ -492,7 +492,48 @@
   (DELETE "/location-images/:location_id/:image_id" [location_id image_id]
     (delete-location-image location_id image_id))
   (GET "/item-images" request (get-item-images request))
-  (GET "/location-images" request (get-location-images request)))
+  (GET "/location-images" request (get-location-images request))
+  ;; Location Types
+  (GET "/location-types" []
+    (response (db/db-get-location-types)))
+  (POST "/location-types" req
+    (let [loc-type (-> (:body req)
+                       (assoc :created_at (db/current-timestamp)
+                              :updated_at (db/current-timestamp)))]
+      (response (db/db-add-location-type loc-type))))
+  (PUT "/location-types/:id" [id :as req]
+    (let [loc-type (:body req)]
+      (response (db/db-update-location-type (Integer/parseInt id) loc-type))))
+  (DELETE "/location-types/:id" [id]
+    (response (db/db-delete-location-type (Integer/parseInt id))))
+
+  ;; Location Areas (similar to Location Types)
+  (GET "/location-areas" []
+    (response (db/db-get-location-areas)))
+  (POST "/location-areas" req
+    (let [loc-area (-> (:body req)
+                       (assoc :created_at (db/current-timestamp)
+                              :updated_at (db/current-timestamp)))]
+      (response (db/db-add-location-area loc-area))))
+  (PUT "/location-areas/:id" [id :as req]
+    (let [loc-area (:body req)]
+      (response (db/db-update-location-area (Integer/parseInt id) loc-area))))
+  (DELETE "/location-areas/:id" [id]
+    (response (db/db-delete-location-area (Integer/parseInt id))))
+
+  ;; Item Categories (similar to Location Types)
+  (GET "/item-categories" []
+    (response (db/db-get-item-categories)))
+  (POST "/item-categories" req
+    (let [category (-> (:body req)
+                       (assoc :created_at (db/current-timestamp)
+                              :updated_at (db/current-timestamp)))]
+      (response (db/db-add-item-category category))))
+  (PUT "/item-categories/:id" [id :as req]
+    (let [category (:body req)]
+      (response (db/db-update-item-category (Integer/parseInt id) category))))
+  (DELETE "/item-categories/:id" [id]
+    (response (db/db-delete-item-category (Integer/parseInt id)))))
 
 (defroutes public-routes
   (GET "/locations/hierarchy" request (get-location-hierarchy request))
