@@ -5,7 +5,8 @@
             [clojure.string :as str]
             [clojure.set :as set]
             [cheshire.core :as json]
-            [workshop-api.common :refer [valid-uuid?]])
+            [workshop-api.common :refer [valid-uuid?]]
+            [taoensso.timbre :as log])
   (:import [java.sql Timestamp]
            [java.time Instant]))
 
@@ -33,7 +34,7 @@
                         (:name loc-type) (:description loc-type) (:created_at loc-type) (:updated_at loc-type)]
                        {:return-keys true :builder-fn rs/as-unqualified-lower-maps})
     (catch Exception e
-      (println "Failed to add location type:" (.getMessage e))
+      (log/error "Failed to add location type:" (.getMessage e))
       (throw e))))
 
 (defn db-get-location-type [id]
@@ -52,7 +53,7 @@
         updateable-fields (assoc updateable-fields :updated_at now)]
     (if (empty? (dissoc updateable-fields :updated_at))
       (do
-        (println "No fields to update for location type ID:" id)
+        (log/error "No fields to update for location type ID:" id)
         nil)
       (let [sql (str "UPDATE location_types SET "
                      (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
@@ -76,7 +77,7 @@
                          ["DELETE FROM location_types WHERE id = ?" id]
                          {:return-keys true :builder-fn rs/as-unqualified-lower-maps}))
     (catch Exception e
-      (println "Failed to delete location type ID:" id "Error:" (.getMessage e))
+      (log/error "Failed to delete location type ID:" id "Error:" (.getMessage e))
       (throw e))))
 
 ;; --- Location Areas Management ---
@@ -90,7 +91,7 @@
                         (:name loc-area) (:description loc-area) (:created_at loc-area) (:updated_at loc-area)]
                        {:return-keys true :builder-fn rs/as-unqualified-lower-maps})
     (catch Exception e
-      (println "Failed to add location area:" (.getMessage e))
+      (log/error "Failed to add location area:" (.getMessage e))
       (throw e))))
 
 (defn db-get-location-area [id]
@@ -109,7 +110,7 @@
         updateable-fields (assoc updateable-fields :updated_at now)]
     (if (empty? (dissoc updateable-fields :updated_at))
       (do
-        (println "No fields to update for location area ID:" id)
+        (log/error "No fields to update for location area ID:" id)
         nil)
       (let [sql (str "UPDATE location_areas SET "
                      (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
@@ -133,7 +134,7 @@
                          ["DELETE FROM location_areas WHERE id = ?" id]
                          {:return-keys true :builder-fn rs/as-unqualified-lower-maps}))
     (catch Exception e
-      (println "Failed to delete location area ID:" id "Error:" (.getMessage e))
+      (log/error "Failed to delete location area ID:" id "Error:" (.getMessage e))
       (throw e))))
 
 ;; --- Item Categories Management ---
@@ -147,7 +148,7 @@
                         (:name category) (:description category) (:created_at category) (:updated_at category)]
                        {:return-keys true :builder-fn rs/as-unqualified-lower-maps})
     (catch Exception e
-      (println "Failed to add item category:" (.getMessage e))
+      (log/error "Failed to add item category:" (.getMessage e))
       (throw e))))
 
 (defn db-get-item-category [id]
@@ -166,7 +167,7 @@
         updateable-fields (assoc updateable-fields :updated_at now)]
     (if (empty? (dissoc updateable-fields :updated_at))
       (do
-        (println "No fields to update for item category ID:" id)
+        (log/error "No fields to update for item category ID:" id)
         nil)
       (let [sql (str "UPDATE item_categories SET "
                      (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
@@ -190,12 +191,12 @@
                          ["DELETE FROM item_categories WHERE id = ?" id]
                          {:return-keys true :builder-fn rs/as-unqualified-lower-maps}))
     (catch Exception e
-      (println "Failed to delete item category ID:" id "Error:" (.getMessage e))
+      (log/error "Failed to delete item category ID:" id "Error:" (.getMessage e))
       (throw e))))
 
 ;; --- Modified Location Functions ---
 (defn db-add-location [loc]
-;;  (println "Adding location with input:" loc)
+;;  (log/error "Adding location with input:" loc)
   (try
     (jdbc/with-transaction [tx ds]
       ;; Validate required fields and foreign keys
@@ -212,14 +213,14 @@
                                        VALUES (?::uuid, ?, ?, ?, ?, ?::uuid, ?, ?, ?)"
                                        (:id loc) (:label loc) (:name loc) (:location_type_id loc) (:description loc) (:parent_id loc) (:location_area_id loc) (:created_at loc) (:updated_at loc)]
                                       {:return-keys true :builder-fn rs/as-unqualified-lower-maps})]
-        (println "Added location ID:" (:id result))
+        (log/debug "Added location ID:" (:id result))
         result))
     (catch Exception e
-      (println "Transaction failed for location add:" (.getMessage e))
+      (log/error "Transaction failed for location add:" (.getMessage e))
       (throw e))))
 
 (defn db-get-location [id]
-  (println "Fetching location with ID:" id)
+  (log/debug "Fetching location with ID:" id)
   (try
     (let [result (jdbc/execute-one! ds
                                     ["SELECT l.*, lt.name AS location_type_name, la.name AS location_area_name
@@ -228,10 +229,10 @@
                                       LEFT JOIN location_areas la ON l.location_area_id = la.id
                                       WHERE l.id = ?::uuid" id]
                                     {:builder-fn rs/as-unqualified-lower-maps})]
-;;      (println "Location fetch result:" result)
+;;      (log/error "Location fetch result:" result)
       result)
     (catch Exception e
-      (println "Error fetching location ID:" id "Error:" (.getMessage e))
+      (log/error "Error fetching location ID:" id "Error:" (.getMessage e))
       nil)))
 
 (defn get-location-path [loc-id]
@@ -253,7 +254,7 @@
     (map #(assoc % :location_path (get-location-path (:id %))) locations)))
 
 (defn db-get-location-type [id]
-  (println "Fetching location type with ID:" id "type:" (type id))
+  (log/debug "Fetching location type with ID:" id "type:" (type id))
   (try
     (let [conn (jdbc/get-connection ds)
           stmt (.prepareStatement conn "SELECT * FROM location_types WHERE id = ?")]
@@ -267,12 +268,12 @@
         (.close conn)
         result))
     (catch Exception e
-      (println "Failed to fetch location type ID:" id "Error:" (.getMessage e))
+      (log/error "Failed to fetch location type ID:" id "Error:" (.getMessage e))
       (.printStackTrace e System/out)
       nil)))
 
 (defn db-get-location-area [id]
-  (println "Fetching location area with ID:" id "type:" (type id))
+  (log/debug "Fetching location area with ID:" id "type:" (type id))
   (try
     (let [conn (jdbc/get-connection ds)
           stmt (.prepareStatement conn "SELECT * FROM location_areas WHERE id = ?")]
@@ -286,55 +287,55 @@
         (.close conn)
         result))
     (catch Exception e
-      (println "Failed to fetch location area ID:" id "Error:" (.getMessage e))
+      (log/error "Failed to fetch location area ID:" id "Error:" (.getMessage e))
       (.printStackTrace e System/out)
       nil)))
 
 (defn db-update-location [id loc]
-  (println "this is version 0.7")
+  (log/debug "this is version 0.7")
   (let [now (current-timestamp)
         updateable-fields (select-keys loc [:label :name :location_type_id :description :parent_id :location_area_id])
         updateable-fields (assoc updateable-fields :updated_at now)
         required-fields [:name :location_type_id :location_area_id]
         existing-loc (db-get-location id)]
-    (println "Attempting to update location ID:" id "with fields:" updateable-fields)
-    (println ">>fields:")
-    (println "   loc-type:" (:location_type_id updateable-fields) "type:" (type (:location_type_id updateable-fields)))
-    (println "   loc-area:" (:location_area_id updateable-fields) "type:" (type (:location_area_id updateable-fields)))
-    (println "   parent_id:" (:parent_id updateable-fields) "type:" (type (:parent_id updateable-fields)))
+    (log/debug "Attempting to update location ID:" id "with fields:" updateable-fields)
+    (log/debug ">>fields:")
+    (log/debug "   loc-type:" (:location_type_id updateable-fields) "type:" (type (:location_type_id updateable-fields)))
+    (log/debug "   loc-area:" (:location_area_id updateable-fields) "type:" (type (:location_area_id updateable-fields)))
+    (log/debug "   parent_id:" (:parent_id updateable-fields) "type:" (type (:parent_id updateable-fields)))
     (cond
       (nil? existing-loc)
       (do
-        (println "Location not found for ID:" id)
+        (log/error "Location not found for ID:" id)
         nil)
       (empty? (dissoc updateable-fields :updated_at))
       (do
-        (println "No fields to update for location ID:" id)
+        (log/error "No fields to update for location ID:" id)
         nil)
       (some #(and (contains? updateable-fields %) (or (nil? (get updateable-fields %)) (and (string? (get updateable-fields %)) (str/blank? (get updateable-fields %))))) required-fields)
       (do
-        (println "Invalid or missing required field for location ID:" id "Fields:" updateable-fields)
+        (log/error "Invalid or missing required field for location ID:" id "Fields:" updateable-fields)
         nil)
       (and (:parent_id updateable-fields)
            (not (and (valid-uuid? (:parent_id updateable-fields))
                      (db-get-location (:parent_id updateable-fields)))))
       (do
-        (println "Invalid or non-existent parent_id for location ID:" id "parent_id:" (:parent_id updateable-fields))
+        (log/error "Invalid or non-existent parent_id for location ID:" id "parent_id:" (:parent_id updateable-fields))
         nil)
       (and (:location_type_id updateable-fields)
            (nil? (db-get-location-type (int (:location_type_id updateable-fields)))))
       (do
-        (println "Invalid location_type_id for location ID:" id "location_type_id:" (:location_type_id updateable-fields))
+        (log/error "Invalid location_type_id for location ID:" id "location_type_id:" (:location_type_id updateable-fields))
         nil)
       (and (:location_type_id updateable-fields)
            (nil? (db-get-location-type (int (:location_type_id updateable-fields)))))
       (do
-        (println "Invalid location_type_id for location ID:" id "location_type_id:" (:location_type_id updateable-fields))
+        (log/error "Invalid location_type_id for location ID:" id "location_type_id:" (:location_type_id updateable-fields))
         nil)
       (and (:location_area_id updateable-fields)
            (nil? (db-get-location-area (int (:location_area_id updateable-fields)))))
       (do
-        (println "Invalid location_area_id for location ID:" id "location_area_id:" (:location_area_id updateable-fields))
+        (log/error "Invalid location_area_id for location ID:" id "location_area_id:" (:location_area_id updateable-fields))
         nil)
       :else
       (let [merged-fields (merge (select-keys existing-loc required-fields) updateable-fields)
@@ -364,18 +365,18 @@
                                     :else value)))
                               set-fields)
                          [id]))]
-        (println "Generated SQL:" sql)
-        (println "Parameters:" params)
-        (println "Parameter types:" (map type params))
+        (log/debug "Generated SQL:" sql)
+        (log/debug "Parameters:" params)
+        (log/debug "Parameter types:" (map type params))
         (try
           (let [result (jdbc/execute-one! ds
                                           (into [sql] params)
                                           {:return-keys true :builder-fn rs/as-unqualified-lower-maps})]
-            (println "Update result for location ID:" id "Result:" result)
+            (log/debug "Update result for location ID:" id "Result:" result)
             result)
           (catch Exception e
-            (println "Failed to update location ID:" id "Error:" (.getMessage e))
-            (println "Full stack trace:")
+            (log/error "Failed to update location ID:" id "Error:" (.getMessage e))
+            (log/error "Full stack trace:")
             (.printStackTrace e System/out)
             (throw (ex-info "Database update failed" {:error (.getMessage e)}))))))))
 ;; --- Modified Item Functions ---
@@ -391,7 +392,7 @@
                         (:id item) (:name item) (:item_category_id item) (:supplier item) (:supplier_part_no item) (:supplier_item_url item) (:description item) (:notes item) (:quantity item) (:location_id item) (:acquisition_date item) (:created_at item) (:updated_at item)]
                        {:return-keys true :builder-fn rs/as-unqualified-lower-maps})
     (catch Exception e
-      (println "Failed to add item:" (.getMessage e))
+      (log/error "Failed to add item:" (.getMessage e))
       (throw e))))
 
 (defn db-update-item [id item]
@@ -401,20 +402,20 @@
                                              :location_id :acquisition_date])
         updateable-fields (assoc updateable-fields :updated_at now)
         required-fields [:name :item_category_id]]
-    (println "Attempting to update item ID:" id "with fields:" updateable-fields)
+    (log/debug "Attempting to update item ID:" id "with fields:" updateable-fields)
     (cond
       (and (:item_category_id updateable-fields)
            (nil? (db-get-item-category (:item_category_id updateable-fields))))
       (do
-        (println "Invalid item_category_id for item ID:" id "item_category_id:" (:item_category_id updateable-fields))
+        (log/error "Invalid item_category_id for item ID:" id "item_category_id:" (:item_category_id updateable-fields))
         nil)
       (empty? (dissoc updateable-fields :updated_at))
       (do
-        (println "No fields to update for item ID:" id)
+        (log/error "No fields to update for item ID:" id)
         nil)
       (some #(and (contains? updateable-fields %) (or (nil? (get updateable-fields %)) (str/blank? (get updateable-fields %)))) required-fields)
       (do
-        (println "Invalid or missing required field for item ID:" id "Fields:" updateable-fields)
+        (log/error "Invalid or missing required field for item ID:" id "Fields:" updateable-fields)
         nil)
       :else
       (let [sql (str "UPDATE items SET "
@@ -474,12 +475,12 @@
       (letfn [(build-node [loc-id visited]
                 (if (contains? visited loc-id)
                   (do
-                    (println "Circular reference detected at loc-id:" loc-id)
+                    (log/error "Circular reference detected at loc-id:" loc-id)
                     {:children []})
                   (let [loc (get loc-map loc-id)]
                     (if-not loc
                       (do
-                        (println "Location not found for id:" loc-id)
+                        (log/error "Location not found for id:" loc-id)
                         {:children []})
                       (let [children (filter #(= (:parent_id %) loc-id) (vals loc-map))
                             children-with-hierarchy (map #(build-node (:id %) (conj visited loc-id))
@@ -494,7 +495,7 @@
              (sort-by :name)
              vec)))
     (catch Exception e
-      (println "Error building location hierarchy:" (.getMessage e))
+      (log/error "Error building location hierarchy:" (.getMessage e))
       (throw (ex-info "Failed to build location hierarchy" {:error (.getMessage e)})))))
 
 ;; --- Existing Functions (Unchanged) ---
@@ -520,7 +521,7 @@
         updateable-fields (assoc updateable-fields :updated_at now)]
     (if (empty? (dissoc updateable-fields :updated_at))
       (do
-        (println "No fields to update for image analysis ID:" id)
+        (log/error "No fields to update for image analysis ID:" id)
         nil)
       (let [sql (str "UPDATE image_analyses SET "
                      (str/join ", " (map #(if (= % :result)
@@ -544,7 +545,7 @@
                         (try
                           (json/parse-string (.getValue result) true)
                           (catch Exception e
-                            (println "Error parsing result:" (.getMessage e))
+                            (log/error "Error parsing result:" (.getMessage e))
                             result)))))
            analyses))))
 
@@ -560,7 +561,7 @@
                     (try
                       (json/parse-string (.getValue result) true)
                       (catch Exception e
-                        (println "Error parsing result:" (.getMessage e))
+                        (log/error "Error parsing result:" (.getMessage e))
                         result)))))
         nil))))
 
@@ -571,7 +572,7 @@
         updateable-fields (assoc updateable-fields :updated_at now)]
     (if (empty? (dissoc updateable-fields :updated_at))
       (do
-        (println "No fields to update for image ID:" id)
+        (log/error "No fields to update for image ID:" id)
         nil)
       (let [sql (str "UPDATE images SET "
                      (str/join ", " (map #(str (name %) " = ?") (keys updateable-fields)))
@@ -610,7 +611,7 @@
                         (:id user) (:username user) (:password_hash user) (:created_at user) (:updated_at user)]
                        {:return-keys true :builder-fn rs/as-unqualified-lower-maps})
     (catch Exception e
-      (println "Failed to add user:" (.getMessage e))
+      (log/error "Failed to add user:" (.getMessage e))
       (throw e))))
 
 (defn db-get-user-by-username [username]

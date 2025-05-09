@@ -10,7 +10,8 @@
             [workshop-api.db :refer [ds db-add-location db-get-location db-update-location db-check-location-items current-timestamp db-add-item]]
             [workshop-api.core :refer [app]]
             [workshop-api.common :refer [valid-uuid?]]
-            [workshop-api.util :refer [generate-id]]))
+            [workshop-api.util :refer [generate-id]]
+            [taoensso.timbre :as log]))
 
 (def jwt-secret (or (System/getenv "JWT_SECRET") "your-secure-secret-here"))
 

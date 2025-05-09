@@ -2,7 +2,8 @@
   (:require [clojure.string :as str]
             [workshop-api.db :as db]
             [workshop-api.common :refer [valid-uuid?]]
-            [workshop-api.gemini-describe :as gemini]))
+            [workshop-api.gemini-describe :as gemini]
+            [taoensso.timbre :as log]))
 
 (defn keywordize-keys [m]
   (into {} (map (fn [[k v]] [(if (string? k) (keyword k) k) v]) m)))
@@ -46,7 +47,7 @@
        (or (nil? (:acquisition_date item)) (string? (:acquisition_date item)))))
 
 (defn valid-partial-location? [loc]
-  (println "Validating partial location:" loc)
+  (log/debug "Validating partial location:" loc)
   (let [is-map (map? loc)
         name-valid (or (nil? (:name loc)) (and (string? (:name loc)) (not (str/blank? (:name loc)))))
         location-type-valid (or (nil? (:location_type_id loc))
@@ -64,16 +65,16 @@
         result (and is-map name-valid location-type-valid location-area-valid
                     label-valid desc-valid parent-uuid parent-exists)]
     (when (not result)
-      (println "Validation checks:")
-      (println "  map?:" is-map)
-      (println "  name nil or non-blank string?:" name-valid)
-      (println "  location_type_id nil or valid?:" location-type-valid)
-      (println "  location_area_id nil or valid?:" location-area-valid)
-      (println "  label nil or string?:" label-valid)
-      (println "  description nil or string?:" desc-valid)
-      (println "  parent_id nil or valid UUID?:" parent-uuid)
-      (println "  parent_id exists?:" parent-exists)
-      (println "  Final result:" result))
+      (log/debug "Validation checks:")
+      (log/debug "  map?:" is-map)
+      (log/debug "  name nil or non-blank string?:" name-valid)
+      (log/debug "  location_type_id nil or valid?:" location-type-valid)
+      (log/debug "  location_area_id nil or valid?:" location-area-valid)
+      (log/debug "  label nil or string?:" label-valid)
+      (log/debug "  description nil or string?:" desc-valid)
+      (log/debug "  parent_id nil or valid UUID?:" parent-uuid)
+      (log/debug "  parent_id exists?:" parent-exists)
+      (log/debug "  Final result:" result))
     result))
 
 (defn valid-image? [image]
@@ -87,7 +88,7 @@
   (let [model-version (if (string? (:model_version config))
                         (keyword (:model_version config))
                         (:model_version config))]
-    (println "Processed model_version:" model-version)
+    (log/debug "Processed model_version:" model-version)
     (and (or (nil? model-version) (keyword? model-version))
          (or (nil? (:analysis_type config)) (string? (:analysis_type config))))))
 
@@ -95,7 +96,7 @@
   (let [model-version (if (string? (:model_version config))
                         (keyword (:model_version config))
                         (:model_version config))]
-    (println "Processed model_version:" model-version)
+    (log/debug "Processed model_version:" model-version)
     (and (map? config)
          (or (keyword? model-version) (string? model-version))
          (string? (:analysis_type config))
@@ -150,13 +151,13 @@
 (defn descend-hierarchy
   [hierarchy-or-node path]
   (letfn [(descend [node path]
-            (println "Descending at path" path "node type" (type node) "children type" (type (:children node)))
+            (log/debug "Descending at path" path "node type" (type node) "children type" (type (:children node)))
             (cond
               (empty? path) node
               (or (not (map? node)) (not (:children node))) nil
               (not (or (vector? (:children node)) (seq? (:children node))))
               (do
-                (println "Warning: :children is not a sequence at path" path "type:" (type (:children node)) "value:" (:children node))
+                (log/warn "Warning: :children is not a sequence at path" path "type:" (type (:children node)) "value:" (:children node))
                 nil)
               :else (let [index (first path)]
                       (if (and (integer? index) (>= index 0) (< index (count (:children node))))

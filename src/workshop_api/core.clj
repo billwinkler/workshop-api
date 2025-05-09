@@ -10,7 +10,10 @@
             [workshop-api.auth :as auth]
             [workshop-api.routes :as routes]
             [workshop-api.middleware :as middleware]
-            [buddy.auth.middleware :refer [wrap-authentication wrap-authorization]]))
+            [buddy.auth.middleware :refer [wrap-authentication wrap-authorization]]
+            [taoensso.timbre :as log]))
+
+(log/merge-config! {:min-level :error})
 
 (def app
   (-> (routes
@@ -29,11 +32,11 @@
 (defn test-connection []
   (try
     (jdbc/execute-one! db/ds ["SELECT 1"])
-    (println "Database connection successful")
+    (log/debug "Database connection successful")
     (catch Exception e
-      (println "Database connection failed:" (.getMessage e)))))
+      (log/debug "Database connection failed:" (.getMessage e)))))
 
 (defn -main []
-  (println "Starting workshop-api v0.1.0")
+  (log/info "Starting workshop-api v0.1.0")
   (test-connection)
   (jetty/run-jetty app {:port 3000 :join? false}))

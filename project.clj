@@ -24,7 +24,8 @@
                  [com.google.zxing/javase "3.5.2"]
                  [net.glxn/qrgen "1.4"]
                  [com.github.kenglxn.QRGen/javase "2.6.0"]
-                 [com.github.kenglxn.QRGen/core "2.6.0"]]
+                 [com.github.kenglxn.QRGen/core "2.6.0"]
+                 [com.taoensso/timbre "5.2.1"]]
   :repositories  [["jitpack" "https://jitpack.io"]] ;; Add JitPack repository for QR code generation
   :main ^:skip-aot workshop-api.core
   :target-path "target/%s"

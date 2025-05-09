@@ -8,11 +8,12 @@
             [workshop-api.middleware :refer [wrap-auth]]
             [workshop-api.auth :as auth]
             [buddy.auth :refer [authenticated? throw-unauthorized]]
-            [cheshire.core :as json]))
+            [cheshire.core :as json]
+            [taoensso.timbre :as log]))
 
 (defn add-location [request]
   (let [loc (db/keywordize-keys (:body request))]
-    (println "in routes/add-location, body:" request)
+    (log/debug "in routes/add-location, body:" request)
     (if (util/valid-location? loc)
       (let [new-loc (util/prepare-location loc)]
         (db/db-add-location new-loc)
@@ -23,22 +24,22 @@
   (let [loc (-> (db/keywordize-keys (:body request))
                 (update :location_type_id #(cond (string? %) (Integer/parseInt %) (number? %) (int %) :else %))
                 (update :location_area_id #(cond (string? %) (Integer/parseInt %) (number? %) (int %) :else %)))]
-    (println "Validating partial location:" loc "Result:" (util/valid-partial-location? loc))
+    (log/debug "Validating partial location:" loc "Result:" (util/valid-partial-location? loc))
     (when (instance? java.io.InputStream (:body request))
       (try
         (.close (:body request))
         (catch Exception e
-          (println "Error closing request body stream:" (.getMessage e)))))
+          (log/error "Error closing request body stream:" (.getMessage e)))))
     (if (util/valid-partial-location? loc)
       (if-let [existing-loc (db/db-get-location id)]
         (try
           (if-let [updated-loc (db/db-update-location id loc)]
             (response updated-loc)
             (do
-              (println "Failed to update location in database for ID:" id "Location:" loc)
+              (log/error "Failed to update location in database for ID:" id "Location:" loc)
               (status (response {:error "No fields to update or failed to update location"}) 400)))
           (catch Exception e
-            (println "Error updating location ID:" id "Error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
+            (log/error "Error updating location ID:" id "Error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
             (status (response {:error "Internal server error" :message (.getMessage e)}) 500)))
         (status (response {:error "Location not found"}) 404))
       (status (response {:error "Invalid location format" :data loc}) 400))))
@@ -68,7 +69,7 @@
             (status (response {:error "Database error" :message (.getMessage e)}) 400)))
         (status (response {:error "Invalid item format" :data item}) 400))
       (do
-        (println "add-item error: body is not a map, received:" (:body request))
+        (log/error "add-item error: body is not a map, received:" (:body request))
         (status (response {:error "Invalid request body" :data (:body request)}) 400)))))
 
 (defn get-all-items [_request]
@@ -77,24 +78,24 @@
 
 (defn update-item [request id]
   (let [item (db/keywordize-keys (:body request))]
-    (println "### Validating partial item:" item "Result:" (util/valid-partial-item? item))
+    (log/debug "### Validating partial item:" item "Result:" (util/valid-partial-item? item))
     (when (instance? java.io.InputStream (:body request))
       (try
         (.close (:body request))
         (catch Exception e
-          (println "Error closing request body stream:" (.getMessage e)))))
+          (log/error "Error closing request body stream:" (.getMessage e)))))
     (try
       (if (util/valid-partial-item? item)
         (if-let [existing-item (db/db-get-item id)]
           (if-let [updated-item (db/db-update-item id item)]
             (response updated-item)
             (do
-              (println "### Failed to update item in database for ID:" id "Item:" item)
+              (log/error "### Failed to update item in database for ID:" id "Item:" item)
               (status (response {:error "No fields to update or failed to update item"}) 400)))
           (status (response {:error "Item not found"}) 404))
         (status (response {:error "Invalid item format" :data item}) 400))
       (catch Exception e
-        (println "### Error in update-item for ID:" id "Error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
+        (log/error "### Error in update-item for ID:" id "Error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
         (status (response {:error "Internal server error" :message (.getMessage e)}) 500)))))
 
 (defn delete-item [id]
@@ -123,7 +124,7 @@
         (response (assoc item-with-path :images images)))
       (status (response {:error "Item not found"}) 404))
     (catch Exception e
-      (println "Error in get-item for ID:" id "Error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
+      (log/error "Error in get-item for ID:" id "Error:" (.getMessage e) "Stacktrace:" (.getStackTrace e))
       (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
 
 (defn add-item-image [request]
@@ -177,7 +178,7 @@
 (defn get-item-images [request]
   (let [item-id (get-in request [:query-params "item_id"])
         token (get-in request [:headers "authorization"])]
-    (println "get-item-images: item_id =" item-id ", token =" token)
+    (log/debug "get-item-images: item_id =" item-id ", token =" token)
     (if (valid-uuid? item-id)
       (let [images (db/db-get-item-images item-id)]
         (if (seq images)
@@ -188,7 +189,7 @@
 (defn get-location-images [request]
   (let [location-id (get-in request [:query-params "location_id"])
         token (get-in request [:headers "authorization"])]
-    (println "get-location-images: location_id =" location-id ", token =" token)
+    (log/debug "get-location-images: location_id =" location-id ", token =" token)
     (if (valid-uuid? location-id)
       (let [images (db/db-get-location-images location-id)]
         (if (seq images)
@@ -204,113 +205,113 @@
           (db/db-add-image new-image)
           (response new-image))
         (catch Exception e
-          (println "Error adding image:" (.getMessage e))
+          (log/error "Error adding image:" (.getMessage e))
           (status (response {:error "Database error" :message (.getMessage e)}) 400)))
       (status (response {:error "Invalid image format" :data image}) 400))))
 
 (defn analyze-image-v0 [request id]
-  (println "Analyzing image ID:" id)
+  (log/debug "Analyzing image ID:" id)
   (let [conn (or (:next.jdbc/connection request) db/ds)]
     (cond
       (not (valid-uuid? id))
       (do
-        (println "Invalid UUID format:" id)
+        (log/error "Invalid UUID format:" id)
         (status (response {:error "Invalid UUID format" :id id}) 400))
 
       (not (db/db-get-image id conn))
       (do
-        (println "Image not found for ID:" id)
+        (log/error "Image not found for ID:" id)
         (status (response {:error "Image not found"}) 404))
 
       :else
       (let [config (db/keywordize-keys (:body request))]
-        (println "Config:" config)
+        (log/debug "Config:" config)
         (if (not (util/valid-analysis-config? config))
           (do
-            (println "Invalid analysis config:" config)
+            (log/error "Invalid analysis config:" config)
             (status (response {:error "Invalid analysis configuration" :data config}) 400))
           (try
             (let [image (db/db-get-image id conn)
                   analysis (util/prepare-image-analysis id config)]
-              (println "Starting analysis for image ID:" id)
+              (log/debug "Starting analysis for image ID:" id)
               (db/db-add-image-analysis analysis conn)
               (thread
                 (try
-                  (println "Processing analysis ID:" (:id analysis))
+                  (log/debug "Processing analysis ID:" (:id analysis))
                   (db/db-update-image-analysis (:id analysis) {:status "processing"} conn)
                   (let [result (util/gemini-call (:image_data image) (:model_version analysis) (:analysis_type analysis))]
-                    (println "Gemini API result for analysis ID:" (:id analysis))
+                    (log/debug "Gemini API result for analysis ID:" (:id analysis))
                     (db/db-update-image-analysis (:id analysis)
                                               {:status "completed"
                                                :result (json/generate-string result)}
                                               conn)
-                    (println "Analysis completed for ID:" (:id analysis)))
+                    (log/debug "Analysis completed for ID:" (:id analysis)))
                   (catch Exception e
-                    (println "Error in analysis ID:" (:id analysis) "Error:" (.getMessage e))
+                    (log/error "Error in analysis ID:" (:id analysis) "Error:" (.getMessage e))
                     (db/db-update-image-analysis (:id analysis)
                                               {:status "failed"
                                                :error_message (.getMessage e)}
                                               conn)
-                    (println "Analysis failed for ID:" (:id analysis)))))
+                    (log/error "Analysis failed for ID:" (:id analysis)))))
               (response {:status "analysis_started" :image_id id :analysis_id (:id analysis)}))
             (catch Exception e
-              (println "Error starting analysis for ID:" id "Error:" (.getMessage e))
+              (log/error "Error starting analysis for ID:" id "Error:" (.getMessage e))
               (status (response {:error "Database error" :message (.getMessage e)}) 500))))))))
 
 (defn analyze-image [request id]
-  (println "Analyzing image ID:" id)
+  (log/debug "Analyzing image ID:" id)
   (let [conn (or (:next.jdbc/connection request) db/ds)]
     (cond
       (not (valid-uuid? id))
       (do
-        (println "Invalid UUID format:" id)
+        (log/error "Invalid UUID format:" id)
         (status (response {:error "Invalid UUID format" :id id}) 400))
 
       (not (db/db-get-image id conn))
       (do
-        (println "Image not found for ID:" id)
+        (log/error "Image not found for ID:" id)
         (status (response {:error "Image not found"}) 404))
 
       :else
       (let [config (db/keywordize-keys (:body request))]
-        (println "Config:" config)
+        (log/debug "Config:" config)
         (if (not (util/valid-analysis-config? config))
           (do
-            (println "Invalid analysis config:" config)
+            (log/error "Invalid analysis config:" config)
             (status (response {:error "Invalid analysis configuration" :data config}) 400))
           (try
             (let [image (db/db-get-image id conn)
                   analysis (util/prepare-image-analysis id config)]
-              (println "Starting analysis for image ID:" id)
+              (log/error "Starting analysis for image ID:" id)
               (db/db-add-image-analysis analysis conn)
               (thread
                 (try
-                  (println "Processing analysis ID:" (:id analysis))
+                  (log/debug "Processing analysis ID:" (:id analysis))
                   (db/db-update-image-analysis (:id analysis) {:status "processing"} conn)
                   (let [result (util/gemini-call (:image_data image) (:model_version analysis) (:analysis_type analysis))]
-                    (println "Gemini API result for analysis ID:" (:id analysis))
+                    (log/debug "Gemini API result for analysis ID:" (:id analysis))
                     (db/db-update-image-analysis (:id analysis)
                                                 {:status "completed"
                                                  :result (cheshire.core/generate-string result)}
                                                 conn)
-                    (println "Analysis completed for ID:" (:id analysis)))
+                    (log/debug "Analysis completed for ID:" (:id analysis)))
                   (catch Exception e
-                    (println "Error in analysis ID:" (:id analysis) "Error:" (.getMessage e))
+                    (log/error "Error in analysis ID:" (:id analysis) "Error:" (.getMessage e))
                     (db/db-update-image-analysis (:id analysis)
                                                 {:status "failed"
                                                  :error_message (.getMessage e)}
                                                 conn)
-                    (println "Analysis failed for ID:" (:id analysis)))))
+                    (log/error "Analysis failed for ID:" (:id analysis)))))
               (response {:status "analysis_started" :image_id id :analysis_id (:id analysis)}))
             (catch Exception e
-              (println "Error starting analysis for ID:" id "Error:" (.getMessage e))
+              (log/error "Error starting analysis for ID:" id "Error:" (.getMessage e))
               (status (response {:error "Database error" :message (.getMessage e)}) 500))))))))
 
 (defn get-image-analysis [request image-id]
   (try
-    (println "### Processing get-image-analysis for image-id:" image-id)
-    (println "### Raw query-params:" (:query-params request))
-    (println "### Is UUID valid?" (valid-uuid? image-id))
+    (log/debug "### Processing get-image-analysis for image-id:" image-id)
+    (log/debug "### Raw query-params:" (:query-params request))
+    (log/debug "### Is UUID valid?" (valid-uuid? image-id))
     (if (valid-uuid? image-id)
       (let [fields-str (get-in request [:query-params "fields"])
             allowed-fields #{"status" "summary" "error_message" "analysis_type"
@@ -320,11 +321,11 @@
                                #{"status" "image_id" "analysis_id" "model_version" "analysis_type"}
                                (set (map clojure.string/trim (clojure.string/split fields-str #","))))
             invalid-fields (clojure.set/difference requested-fields allowed-fields)]
-        (println "### Fields string:" fields-str)
-        (println "### Requested fields:" requested-fields "Invalid fields:" invalid-fields)
+        (log/debug "### Fields string:" fields-str)
+        (log/debug "### Requested fields:" requested-fields "Invalid fields:" invalid-fields)
         (if (seq invalid-fields)
           (do
-            (println "### Returning 400 due to invalid fields")
+            (log/debug "### Returning 400 due to invalid fields")
             (status (response {:error "Invalid fields requested" :invalid_fields invalid-fields}) 400))
           (if-let [analysis (first (db/db-get-image-analyses image-id db/ds))]
             (let [status (:status analysis)
@@ -344,7 +345,7 @@
                                                   (let [text (get-in result [:candidates 0 :content :parts 0 :text])]
                                                     (cheshire.core/parse-string text true))
                                                   (catch Exception e
-                                                    (println "Error parsing text JSON for image ID:" image-id "Error:" (.getMessage e))
+                                                    (log/debug "Error parsing text JSON for image ID:" image-id "Error:" (.getMessage e))
                                                     {}))]
                                   (into {} (map (fn [field]
                                                   [(keyword field)
@@ -360,7 +361,7 @@
                                  (select-keys base-response
                                               (map keyword (clojure.set/intersection requested-fields remaining-fields)))
                                  result-data)]
-              (println "### Returning analysis response for status:" status)
+              (log/debug "### Returning analysis response for status:" status)
               (cond
                 (= status "failed") (response (if (contains? requested-fields "error_message")
                                                 response-data
@@ -368,13 +369,13 @@
                 (= status "completed") (response response-data)
                 :else (response response-data)))
             (do
-              (println "### No analysis found for image-id:" image-id)
+              (log/debug "### No analysis found for image-id:" image-id)
               (status (response {:error "Image analysis not found"}) 404)))))
       (do
-        (println "### Returning 400 due to invalid UUID:" image-id)
+        (log/error "### Returning 400 due to invalid UUID:" image-id)
         (status (response {:error "Invalid UUID format" :id image-id}) 400)))
     (catch Exception e
-      (println "### Error in get-image-analysis for image ID:" image-id "Error:" (.getMessage e))
+      (log/error "### Error in get-image-analysis for image ID:" image-id "Error:" (.getMessage e))
       (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
 
 (defn get-image [id]
@@ -385,25 +386,25 @@
 
 (defn get-images [request]
   (try
-    (println "Processing get-images")
+    (log/debug "Processing get-images")
     (let [fields-str (get-in request [:query-params "fields"])
           allowed-fields #{"id" "image_data" "mime_type" "filename" "status" "created_at" "updated_at"}
           requested-fields (if (clojure.string/blank? fields-str)
                              #{"id" "filename" "mime_type" "status"}
                              (set (map clojure.string/trim (clojure.string/split fields-str #","))))
           invalid-fields (clojure.set/difference requested-fields allowed-fields)]
-      (println "Fields string:" fields-str)
-      (println "Requested fields:" requested-fields "Invalid fields:" invalid-fields)
+      (log/debug "Fields string:" fields-str)
+      (log/debug "Requested fields:" requested-fields "Invalid fields:" invalid-fields)
       (if (seq invalid-fields)
         (do
-          (println "Returning 400 due to invalid fields")
+          (log/error "Returning 400 due to invalid fields")
           (status (response {:error "Invalid fields requested" :invalid_fields invalid-fields}) 400))
         (let [images (db/db-get-images requested-fields)]
           (if (seq images)
             (response images)
             (status (response {:error "No images found"}) 404)))))
     (catch Exception e
-      (println "Error in get-images:" (.getMessage e))
+      (log/error "Error in get-images:" (.getMessage e))
       (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
 
 (defn get-items-for-location [location-id]
@@ -419,7 +420,7 @@
     (let [hierarchy (db/build-location-hierarchy)]
       (response hierarchy))
     (catch Exception e
-      (println "Error in get-location-hierarchy:" (.getMessage e))
+      (log/error "Error in get-location-hierarchy:" (.getMessage e))
       (status (response {:error "Internal server error" :message (.getMessage e)}) 500))))
 
 (defn get-location-by-name-or-label [param]
@@ -430,30 +431,30 @@
         uuid-match (re-find uuid-pattern normalized-param)
         id (or (when url-match (second url-match))
                (when uuid-match (second uuid-match)))]
-    (println "Fetching location by name or label:" normalized-param)
+    (log/debug "Fetching location by name or label:" normalized-param)
     (try
       (or
        (when id
          (if-let [loc (db/db-get-location id)]
            (let [loc-with-path (assoc loc :location_path (util/get-location-path (:id loc)))]
-             (println "Found location by ID:" loc-with-path)
+             (log/debug "Found location by ID:" loc-with-path)
              (response loc-with-path))
            (do
-             (println "Location not found for ID:" id)
+             (log/debug "Location not found for ID:" id)
              (status (response {:error "Location not found" :id id}) 404))))
        (when-let [loc (db/db-get-location-by-name normalized-param)]
          (let [loc-with-path (assoc loc :location_path (util/get-location-path (:id loc)))]
-           (println "Found location by name:" loc-with-path)
+           (log/debug "Found location by name:" loc-with-path)
            (response loc-with-path)))
        (when-let [loc (db/db-get-location-by-label normalized-param)]
          (let [loc-with-path (assoc loc :location_path (util/get-location-path (:id loc)))]
-           (println "Found location by label:" loc-with-path)
+           (log/debug "Found location by label:" loc-with-path)
            (response loc-with-path)))
        (do
-         (println "Location not found for name or label:" normalized-param)
+         (log/error "Location not found for name or label:" normalized-param)
          (status (response {:error "Location not found"}) 404)))
       (catch Exception e
-        (println "Error fetching location:" (.getMessage e))
+        (log/error "Error fetching location:" (.getMessage e))
         (status (response {:error "Internal server error" :message (.getMessage e)}) 500)))))
 
 (defn search-inventory [request]
@@ -470,21 +471,21 @@
 (defroutes protected-routes
   (POST "/locations" request (add-location request))
   (PATCH "/locations/:id" [id :as request]
-    (println "Matched route PATCH /locations/:id" id)
+    (log/debug "Matched route PATCH /locations/:id" id)
     (let [response (update-location request id)]
-      (println "Handler response for id" id ":" response)
+      (log/debug "Handler response for id" id ":" response)
       response))
   (DELETE "/locations/:id" [id] (delete-location id))
   (POST "/items" request (add-item request))
   (PATCH "/items/:id" [id :as request]
-    (println "### Matched route PATCH /items/:id" id)
+    (log/debug "### Matched route PATCH /items/:id" id)
     (let [response (update-item request id)]
-      (println "### Handler response for id" id ":" response)
+      (log/debug "### Handler response for id" id ":" response)
       response))
   (DELETE "/items/:id" [id]
-    (println "### Matched route DELETE /images/:id with id:" id)
+    (log/debug "### Matched route DELETE /images/:id with id:" id)
     (let [response (delete-item id)]
-      (println "### Handler response for id" id ":" response)
+      (log/debug "### Handler response for id" id ":" response)
       response))
   (POST "/images" request (add-image request))
   (POST "/images/:id/analyze" [id :as request] (analyze-image request id))
@@ -549,14 +550,14 @@
   (GET "/location/:param" [param] (get-location-by-name-or-label param))
   (GET "/images/:id" [id] (get-image id))
   (GET "/images/:id/analyze" [id :as request]
-    (println "Matched route /images/:id/analyze with id:" id)
+    (log/debug "Matched route /images/:id/analyze with id:" id)
     (let [response (get-image-analysis request id)]
-      (println "Handler response for id" id ":" response)
+      (log/debug "Handler response for id" id ":" response)
       response))
   (GET "/images" request
-    (println "Matched route /images")
+    (log/debug "Matched route /images")
     (let [response (get-images request)]
-      (println "Handler response:" response)
+      (log/debug "Handler response:" response)
       response)))
 
 (defroutes auth-routes
@@ -569,5 +570,5 @@
       public-routes
       (wrap-auth protected-routes)))
   (ANY "*" request
-    (println "Unmatched request - URI:" (:uri request) "Method:" (:request-method request))
+    (log/debug "Unmatched request - URI:" (:uri request) "Method:" (:request-method request))
     (status (response {:error "Route not found" :uri (:uri request)}) 404)))
