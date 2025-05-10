@@ -13,7 +13,10 @@
             [buddy.auth.middleware :refer [wrap-authentication wrap-authorization]]
             [taoensso.timbre :as log]))
 
-(log/merge-config! {:min-level :debug})
+(log/merge-config! {:min-level :error})
+
+(log/with-merged-config {:min-level :debug}
+  (log/info {:db_env (System/getenv "DB_ENV")}))
 
 (def app
   (-> (routes
