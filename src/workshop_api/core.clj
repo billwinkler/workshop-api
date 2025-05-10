@@ -10,13 +10,14 @@
             [workshop-api.auth :as auth]
             [workshop-api.routes :as routes]
             [workshop-api.middleware :as middleware]
+            [workshop-api.utils.git :refer [git-describe-tags]]
             [buddy.auth.middleware :refer [wrap-authentication wrap-authorization]]
             [taoensso.timbre :as log]))
 
 (log/merge-config! {:min-level :error})
 
 (log/with-merged-config {:min-level :debug}
-  (log/info {:db_env (System/getenv "DB_ENV")}))
+  (log/info {:db_env (System/getenv "DB_ENV") :git-version (git-describe-tags)}))
 
 (def app
   (-> (routes

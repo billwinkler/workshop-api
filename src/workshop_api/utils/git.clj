@@ -1,7 +1,7 @@
-(ns workshop-api.utils.git-commit-hash
+(ns workshop-api.utils.git
   (:gen-class)
   (:require [taoensso.timbre :as log]
-            [clojure.java.shell :refer [sh]]))  ; Add clojure.java.shell
+            [clojure.java.shell :refer [sh]]))
 
 (defn git-commit-hash []
   (try
@@ -12,7 +12,7 @@
     (catch Exception _
       "Error getting Git hash")))
 
-(defn git-describe-tabs []
+(defn git-describe-tags []
   (try
     (let [{:keys [exit out]} (sh "git" "describe" "--tags")] 
       (if (zero? exit)
