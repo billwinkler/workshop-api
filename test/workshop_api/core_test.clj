@@ -243,7 +243,7 @@
                                 {}))]
         (is (= 400 (:status response)) "Expected 400 status")
         (is (= "Invalid item format" (:error response-body)) "Expected error message")
-        (is (empty? (find-by-keys-unqualified ds :items {:category "Tool"})) "Expected no item in database"))))
+        (is (empty? (find-by-keys-unqualified ds :items {:item_category_id 3})) "Expected no item in database"))))
   (testing "Adding an invalid item without JWT"
     (let [item {:category "Tool"}
           request (-> (mock/request :post "/api/items")
@@ -256,6 +256,7 @@
                                 {}))]
         (is (= 401 (:status response)) "Expected 401 status")
         (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))))
+
 (deftest test-add-item-non-existent-location
   (testing "Adding an item with non-existent location_id with JWT"
     (let [user {:id (generate-id) :username "testuser"}
@@ -263,9 +264,12 @@
                    :iat (quot (System/currentTimeMillis) 1000)
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
+          category (first (jdbc/execute! ds ["SELECT id FROM item_categories WHERE name = ?" "Hand Tool"]
+                                        {:builder-fn rs/as-unqualified-lower-maps}))
           item {:name "Hammer"
                 :description "Claw hammer"
-                :location_id "00000000-0000-0000-0000-000000000000"}
+                :location_id "00000000-0000-0000-0000-000000000000"
+                :item_category_id (:id category)}
           request (-> (mock/request :post "/api/items")
                       (mock/json-body item)
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
@@ -279,9 +283,12 @@
         (is (= "Database error" (:error response-body)) "Expected error message")
         (is (empty? (find-by-keys-unqualified ds :items {:name "Hammer"})) "Expected no item in database"))))
   (testing "Adding an item with non-existent location_id without JWT"
-    (let [item {:name "Hammer"
+    (let [category (first (jdbc/execute! ds ["SELECT id FROM item_categories WHERE name = ?" "Hand Tool"]
+                                        {:builder-fn rs/as-unqualified-lower-maps}))
+          item {:name "Hammer"
                 :description "Claw hammer"
-                :location_id "00000000-0000-0000-0000-000000000000"}
+                :location_id "00000000-0000-0000-0000-000000000000"
+                :item_category_id (:id category)}
           request (-> (mock/request :post "/api/items")
                       (mock/json-body item))
           response (app request)]
@@ -387,11 +394,13 @@
                     :updated_at (current-timestamp)}
           _ (db-add-location location)
           item-id (generate-id)
+          category (first (jdbc/execute! ds ["SELECT id FROM item_categories WHERE name = ?" "Hand Tool"]
+                                        {:builder-fn rs/as-unqualified-lower-maps}))
           item {:id item-id
                 :name "Screwdriver"
                 :description "Phillips head screwdriver"
                 :location_id location-id
-                :category "Tool"
+                :item_category_id (:id category)
                 :quantity 5
                 :created_at (current-timestamp)
                 :updated_at (current-timestamp)}
@@ -412,15 +421,16 @@
       (let [response-body (try (json/parse-string (:body response) true)
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
-                                {}))
-            db-item-image (find-item-images ds {:item_id item-id :image_id image-id})]
+                                {}))]
+        (println "Response status (item-image):" (:status response))
+        (println "Response body (item-image):" response-body)
         (is (= 200 (:status response)) "Expected 200 status")
         (is (= "success" (:status response-body)) "Expected success status in response")
         (is (= item-id (:item_id response-body)) "Expected correct item_id in response")
         (is (= image-id (:image_id response-body)) "Expected correct image_id in response")
-        (is (= 1 (count db-item-image)) "Expected one item-image link in database")
-        (is (= item-id (str (:item_id (first db-item-image)))) "Expected correct item_id in database")
-        (is (= image-id (str (:image_id (first db-item-image)))) "Expected correct image_id in database"))))
+        (is (= 1 (count (find-item-images ds {:item_id item-id :image_id image-id}))) "Expected one item-image link in database")
+        (is (= item-id (str (:item_id (first (find-item-images ds {:item_id item-id :image_id image-id}))))) "Expected correct item_id in database")
+        (is (= image-id (str (:image_id (first (find-item-images ds {:item_id item-id :image_id image-id}))))) "Expected correct image_id in database"))))
   (testing "Adding a valid item-image link without JWT"
     (let [location-id (generate-id)
           location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
@@ -437,11 +447,13 @@
                     :updated_at (current-timestamp)}
           _ (db-add-location location)
           item-id (generate-id)
+          category (first (jdbc/execute! ds ["SELECT id FROM item_categories WHERE name = ?" "Hand Tool"]
+                                        {:builder-fn rs/as-unqualified-lower-maps}))
           item {:id item-id
                 :name "Screwdriver"
                 :description "Phillips head screwdriver"
                 :location_id location-id
-                :category "Tool"
+                :item_category_id (:id category)
                 :quantity 5
                 :created_at (current-timestamp)
                 :updated_at (current-timestamp)}
@@ -462,6 +474,8 @@
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
                                 {}))]
+        (println "Response status (item-image, no JWT):" (:status response))
+        (println "Response body (item-image, no JWT):" response-body)
         (is (= 401 (:status response)) "Expected 401 status")
         (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message"))))
   (testing "Adding item-image link with invalid UUIDs with JWT"
@@ -479,6 +493,8 @@
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
                                 {}))]
+        (println "Response status (item-image, invalid UUIDs):" (:status response))
+        (println "Response body (item-image, invalid UUIDs):" response-body)
         (is (= 400 (:status response)) "Expected 400 status")
         (is (= "Invalid UUID format" (:error response-body)) "Expected error message")
         (is (empty? (find-item-images ds {:item_id "invalid-uuid"})) "Expected no item-image link in database"))))
@@ -505,6 +521,8 @@
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
                                 {}))]
+        (println "Response status (item-image, non-existent item):" (:status response))
+        (println "Response body (item-image, non-existent item):" response-body)
         (is (= 404 (:status response)) "Expected 404 status")
         (is (= "Item or image not found" (:error response-body)) "Expected error message")
         (is (empty? (find-item-images ds {:item_id "00000000-0000-0000-0000-000000000000"})) "Expected no item-image link in database"))))
@@ -529,11 +547,13 @@
                     :updated_at (current-timestamp)}
           _ (db-add-location location)
           item-id (generate-id)
+          category (first (jdbc/execute! ds ["SELECT id FROM item_categories WHERE name = ?" "Hand Tool"]
+                                        {:builder-fn rs/as-unqualified-lower-maps}))
           item {:id item-id
                 :name "Screwdriver"
                 :description "Phillips head screwdriver"
                 :location_id location-id
-                :category "Tool"
+                :item_category_id (:id category)
                 :quantity 5
                 :created_at (current-timestamp)
                 :updated_at (current-timestamp)}
@@ -547,6 +567,8 @@
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
                                 {}))]
+        (println "Response status (item-image, non-existent image):" (:status response))
+        (println "Response body (item-image, non-existent image):" response-body)
         (is (= 404 (:status response)) "Expected 404 status")
         (is (= "Item or image not found" (:error response-body)) "Expected error message")
         (is (empty? (find-item-images ds {:item_id item-id})) "Expected no item-image link in database")))))
@@ -588,15 +610,16 @@
       (let [response-body (try (json/parse-string (:body response) true)
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
-                                {}))
-            db-location-image (find-location-images ds {:location_id location-id :image_id image-id})]
+                                {}))]
+        (println "Response status (location-image):" (:status response))
+        (println "Response body (location-image):" response-body)
         (is (= 200 (:status response)) "Expected 200 status")
         (is (= "success" (:status response-body)) "Expected success status in response")
         (is (= location-id (:location_id response-body)) "Expected correct location_id in response")
         (is (= image-id (:image_id response-body)) "Expected correct image_id in response")
-        (is (= 1 (count db-location-image)) "Expected one location-image link in database")
-        (is (= location-id (str (:location_id (first db-location-image)))) "Expected correct location_id in database")
-        (is (= image-id (str (:image_id (first db-location-image)))) "Expected correct image_id in database"))))
+        (is (= 1 (count (find-location-images ds {:location_id location-id :image_id image-id}))) "Expected one location-image link in database")
+        (is (= location-id (str (:location_id (first (find-location-images ds {:location_id location-id :image_id image-id}))))) "Expected correct location_id in database")
+        (is (= image-id (str (:image_id (first (find-location-images ds {:location_id location-id :image_id image-id}))))) "Expected correct image_id in database"))))
   (testing "Adding location-image link with invalid UUIDs"
     (let [user {:id (generate-id) :username "testuser"}
           payload {:user_id (:id user) :username (:username user)
@@ -612,6 +635,8 @@
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
                                 {}))]
+        (println "Response status (location-image, invalid UUIDs):" (:status response))
+        (println "Response body (location-image, invalid UUIDs):" response-body)
         (is (= 400 (:status response)) "Expected 400 status")
         (is (= "Invalid UUID format" (:error response-body)) "Expected error message")
         (is (empty? (find-location-images ds {:location_id "invalid-uuid"})) "Expected no location-image link in database"))))
@@ -638,6 +663,8 @@
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
                                 {}))]
+        (println "Response status (location-image, non-existent location):" (:status response))
+        (println "Response body (location-image, non-existent location):" response-body)
         (is (= 404 (:status response)) "Expected 404 status")
         (is (= "Location or image not found" (:error response-body)) "Expected error message")
         (is (empty? (find-location-images ds {:location_id "00000000-0000-0000-0000-000000000000"})) "Expected no location-image link in database"))))
@@ -670,6 +697,8 @@
                               (catch Exception e
                                 (println "Failed to parse response:" (.getMessage e))
                                 {}))]
+        (println "Response status (location-image, non-existent image):" (:status response))
+        (println "Response body (location-image, non-existent image):" response-body)
         (is (= 404 (:status response)) "Expected 404 status")
         (is (= "Location or image not found" (:error response-body)) "Expected error message")
         (is (empty? (find-location-images ds {:location_id location-id})) "Expected no location-image link in database")))))
@@ -705,11 +734,13 @@
                     :updated_at (current-timestamp)}
           _ (db-add-location location)
           item-id (generate-id)
+          category (first (jdbc/execute! ds ["SELECT id FROM item_categories WHERE name = ?" "Hand Tool"]
+                                        {:builder-fn rs/as-unqualified-lower-maps}))
           item {:id item-id
                 :name "Screwdriver"
                 :description "Phillips head screwdriver"
                 :location_id location-id
-                :category "Tool"
+                :item_category_id (:id category)
                 :quantity 5
                 :created_at (current-timestamp)
                 :updated_at (current-timestamp)}
@@ -725,25 +756,29 @@
           _ (db-add-item-image item-id image-id)
           request (-> (mock/request :get (str "/api/item-images?item_id=" item-id))
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
-          response (app request)
-          response-body (try (json/parse-string (:body response) true)
-                             (catch Exception e
-                               (println "Failed to parse response:" (.getMessage e))
-                               {}))]
-      (is (= 200 (:status response)) "Expected 200 status")
-      (is (= 1 (count response-body)) "Expected one image in response")
-      (is (= image-id (:id (first response-body))) "Expected correct image_id in response")
-      (is (= "test.jpg" (:filename (first response-body))) "Expected correct filename in response")))
+          response (app request)]
+      (let [response-body (try (json/parse-string (:body response) true)
+                              (catch Exception e
+                                (println "Failed to parse response:" (.getMessage e))
+                                {}))]
+        (println "Response status (get-item-images):" (:status response))
+        (println "Response body (get-item-images):" response-body)
+        (is (= 200 (:status response)) "Expected 200 status")
+        (is (= 1 (count response-body)) "Expected one image in response")
+        (is (= image-id (:id (first response-body))) "Expected correct image_id in response")
+        (is (= "test.jpg" (:filename (first response-body))) "Expected correct filename in response"))))
   (testing "Getting item images without JWT"
     (let [item-id (generate-id)
           request (-> (mock/request :get (str "/api/item-images?item_id=" item-id)))
-          response (app request)
-          response-body (try (json/parse-string (:body response) true)
-                             (catch Exception e
-                               (println "Failed to parse response:" (.getMessage e))
-                               {}))]
-      (is (= 401 (:status response)) "Expected 401 status")
-      (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))
+          response (app request)]
+      (let [response-body (try (json/parse-string (:body response) true)
+                              (catch Exception e
+                                (println "Failed to parse response:" (.getMessage e))
+                                {}))]
+        (println "Response status (get-item-images, no JWT):" (:status response))
+        (println "Response body (get-item-images, no JWT):" response-body)
+        (is (= 401 (:status response)) "Expected 401 status")
+        (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message"))))
   (testing "Getting item images with invalid item_id"
     (let [user {:id (generate-id) :username "testuser"}
           payload {:user_id (:id user) :username (:username user)
@@ -753,13 +788,15 @@
           invalid-item-id "invalid-uuid"
           request (-> (mock/request :get (str "/api/item-images?item_id=" invalid-item-id))
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
-          response (app request)
-          response-body (try (json/parse-string (:body response) true)
-                             (catch Exception e
-                               (println "Failed to parse response:" (.getMessage e))
-                               {}))]
-      (is (= 400 (:status response)) "Expected 400 status")
-      (is (= "Invalid item_id format" (:error response-body)) "Expected error message")))
+          response (app request)]
+      (let [response-body (try (json/parse-string (:body response) true)
+                              (catch Exception e
+                                (println "Failed to parse response:" (.getMessage e))
+                                {}))]
+        (println "Response status (get-item-images, invalid item_id):" (:status response))
+        (println "Response body (get-item-images, invalid item_id):" response-body)
+        (is (= 400 (:status response)) "Expected 400 status")
+        (is (= "Invalid item_id format" (:error response-body)) "Expected error message"))))
   (testing "Getting item images with non-existent item_id"
     (let [user {:id (generate-id) :username "testuser"}
           payload {:user_id (:id user) :username (:username user)
@@ -769,13 +806,15 @@
           non-existent-item-id "00000000-0000-0000-0000-000000000000"
           request (-> (mock/request :get (str "/api/item-images?item_id=" non-existent-item-id))
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
-          response (app request)
-          response-body (try (json/parse-string (:body response) true)
-                             (catch Exception e
-                               (println "Failed to parse response:" (.getMessage e))
-                               {}))]
-      (is (= 404 (:status response)) "Expected 404 status")
-      (is (= "No images found for item" (:error response-body)) "Expected error message"))))
+          response (app request)]
+      (let [response-body (try (json/parse-string (:body response) true)
+                              (catch Exception e
+                                (println "Failed to parse response:" (.getMessage e))
+                                {}))]
+        (println "Response status (get-item-images, non-existent item_id):" (:status response))
+        (println "Response body (get-item-images, non-existent item_id):" response-body)
+        (is (= 404 (:status response)) "Expected 404 status")
+        (is (= "No images found for item" (:error response-body)) "Expected error message")))))
 
 (deftest test-get-location-images
   (testing "Getting location images with valid location_id and JWT"
@@ -950,7 +989,7 @@
                 :name "Screwdriver"
                 :description "Phillips head screwdriver"
                 :location_id location-id
-                :category "Tool"
+                :item_category_id 3
                 :quantity 5
                 :created_at (current-timestamp)
                 :updated_at (current-timestamp)}
@@ -1111,7 +1150,15 @@
                    :iat (quot (System/currentTimeMillis) 1000)
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
-          location {:label "L1" :name "Tool Shed" :type "Shed" :area "Backyard" :description "Storage for tools"}
+          location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
+                                              {:builder-fn rs/as-unqualified-lower-maps}))
+          location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
+                                              {:builder-fn rs/as-unqualified-lower-maps}))
+          location {:label "L1"
+                    :name "Tool Shed"
+                    :location_type_id (:id location-type)
+                    :location_area_id (:id location-area)
+                    :type "Shed" :area "Backyard" :description "Storage for tools"}
           request (-> (mock/request :post "/api/locations")
                       (mock/json-body location)
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
