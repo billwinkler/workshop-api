@@ -13,7 +13,8 @@
             [workshop-api.util :refer [generate-id]]
             [workshop-api.common :refer [valid-uuid?]]
             [buddy.sign.jwt :as jwt]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [taoensso.timbre :as log]))
 
 (def jwt-secret (or (System/getenv "JWT_SECRET") "your-secure-secret-here"))
 
@@ -25,7 +26,7 @@
                     (str model-version))
         result {:mock_result (str "Analyzed " image-data " with " model-str " and " analysis-type)}
         end-time (System/currentTimeMillis)]
-    (println "mock-gemini-api executed in" (- end-time start-time) "ms")
+    (log/info "mock-gemini-api executed in" (- end-time start-time) "ms")
     result))
 
 ;; Fixture to set up and tear down the test database
@@ -33,14 +34,14 @@
   (try
     (jdbc/execute-one! ds ["SELECT 1"])
     (catch Exception e
-      (println "Test database setup failed:" (.getMessage e))
+      (log/error "Test database setup failed:" (.getMessage e))
       (throw e)))
   (with-redefs [workshop-api.gemini-describe/call-gemini-api mock-gemini-api]
     (f))
   (try
     (jdbc/execute! ds ["TRUNCATE TABLE item_images, location_images, items, images, image_analyses, locations, users RESTART IDENTITY"])
     (catch Exception e
-      (println "Failed to truncate tables:" (.getMessage e)))))
+      (log/error "Failed to truncate tables:" (.getMessage e)))))
 
 (use-fixtures :each db-fixture)
 
@@ -76,7 +77,7 @@
           response (app request)
           response-body (try (json/parse-string (:body response) true)
                              (catch Exception e
-                               (println "Failed to parse response:" (.getMessage e))
+                               (log/error "Failed to parse response:" (.getMessage e))
                                {}))
           db-analysis (find-by-keys-unqualified ds :image_analyses {:image_id image-id})]
       (is (= 200 (:status response)) "Expected 200 status")
@@ -101,7 +102,7 @@
           response (app request)
           response-body (try (json/parse-string (:body response) true)
                              (catch Exception e
-                               (println "Failed to parse response:" (.getMessage e))
+                               (log/error "Failed to parse response:" (.getMessage e))
                                {}))
           db-analysis (find-by-keys-unqualified ds :image_analyses {:image_id image-id})]
       (is (= 401 (:status response)) "Expected 401 status")
@@ -122,7 +123,7 @@
           response (app request)
           response-body (try (json/parse-string (:body response) true)
                              (catch Exception e
-                               (println "Failed to parse response:" (.getMessage e))
+                               (log/error "Failed to parse response:" (.getMessage e))
                                {}))]
       (is (= 400 (:status response)) "Expected 400 status")
       (is (= "Invalid UUID format" (:error response-body)) "Expected error message")))
@@ -141,7 +142,7 @@
           response (app request)
           response-body (try (json/parse-string (:body response) true)
                              (catch Exception e
-                               (println "Failed to parse response:" (.getMessage e))
+                               (log/error "Failed to parse response:" (.getMessage e))
                                {}))
           db-analysis (find-by-keys-unqualified ds :image_analyses {:image_id image-id})]
       (is (= 404 (:status response)) "Expected 404 status")
@@ -169,7 +170,7 @@
           response (app request)
           response-body (try (json/parse-string (:body response) true)
                              (catch Exception e
-                               (println "Failed to parse response:" (.getMessage e))
+                               (log/error "Failed to parse response:" (.getMessage e))
                                {}))
           db-analysis (find-by-keys-unqualified ds :image_analyses {:image_id image-id})]
       (is (= 400 (:status response)) "Expected 400 status")
@@ -184,16 +185,16 @@
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
           image-id (generate-id)
-          _ (println "Generated image-id:" image-id "type:" (type image-id))
+          _ (log/debug "Generated image-id:" image-id "type:" (type image-id))
           image {:id image-id
                  :image_data "base64-encoded-data"
                  :mime_type "image/jpeg"
                  :filename "test.jpg"
                  :created_at (current-timestamp)
                  :updated_at (current-timestamp)}
-          _ (println "Inserting image:" image)
+          _ (log/debug "Inserting image:" image)
           _ (db-add-image image)
-          _ (println "Image inserted:" (db-get-image image-id ds))
+          _ (log/debug "Image inserted:" (db-get-image image-id ds))
           analysis-id (generate-id)
           analysis {:id analysis-id
                     :image_id image-id
@@ -212,9 +213,9 @@
                                             :finishReason "STOP"}]})
                     :created_at (current-timestamp)
                     :updated_at (current-timestamp)}
-          _ (println "Inserting analysis:" analysis)
+          _ (log/debug "Inserting analysis:" analysis)
           _ (db-add-image-analysis analysis)
-          _ (println "Analysis inserted:" (db-get-image-analyses image-id ds))
+          _ (log/debug "Analysis inserted:" (db-get-image-analyses image-id ds))
           request (-> (mock/request :get (str "/api/images/" image-id "/analyze"))
                       (mock/query-string {:fields "status,summary"}) ;; Temporary: match current behavior
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
@@ -222,9 +223,9 @@
           response-body (try
                           (json/parse-string (:body response) true)
                           (catch Exception e
-                            (println "Failed to parse response:" (.getMessage e))
+                            (log/error "Failed to parse response:" (.getMessage e))
                             {}))]
-      (println "the response" response)
+      (log/debug "the response" response)
       (is (= 200 (:status response)) (str "Expected 200 status, got " (:status response)))
       (is (= "completed" (:status response-body)) (str "Expected completed status, got " (:status response-body)))
       (is (= "Test summary" (:summary response-body)) (str "Expected correct summary, got " (:summary response-body))))

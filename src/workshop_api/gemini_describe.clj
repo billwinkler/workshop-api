@@ -5,7 +5,8 @@
             [workshop-api.utils.apikey :as key] 
             [clojure.string :as string]
             [clojure.java.io :as io]
-            [clojure.edn :as edn]))
+            [clojure.edn :as edn]
+            [taoensso.timbre :as log]))
 
 ;;(def model "gemini-2.0-flash")
 ;;(def model "gemini-2.5-pro-preview-03-25")
@@ -52,20 +53,19 @@
                     (throw (Exception. "GEMINI_API_KEY environment variable not set")))
         config (keyword config) ;; force the config to a keyword
         {:keys [model]} (get configurations config)
-        _ (println "Model:" model)
+        _ (log/info "Model:" model)
         url (str model-base-url model ":generateContent?key=" api-key)
         body (make-request-body base64-image config)
         temp-file "/tmp/gemini_request.json"]
-    (println "Preparing Gemini API call with model:" model "Config:" config "Notes:" notes)
-;;    (println "Request URL:" url)
-    (println "Request body size:" (count body) "bytes")
+    (log/report "Preparing Gemini API call with model:" model "Config:" config "Notes:" notes)
+    (log/report "Request body size:" (count body) "bytes")
     (try
       (spit temp-file body)
-      (println "Wrote request body to" temp-file)
+      (log/debug "Wrote request body to" temp-file)
       (let [max-retries 3
             retry-delay 10]
         (loop [attempt 1]
-          (println "Attempting Gemini API call, attempt" attempt "of" max-retries)
+          (log/report "Attempting Gemini API call, attempt" attempt "of" max-retries)
           (let [response
                 (try 
                   (http/post url
@@ -73,30 +73,30 @@
                               :headers {"Content-Type" "application/json"}
                               :as :json})
                   (catch Exception e    ; <-- Correct use of catch
-                    (println "API call failed:" (.getMessage e) "Status:" (:status (ex-data e)))
-                    (println "Response headers:" (get-in (ex-data e) [:headers]))
-                    (println "Response body:" (try
+                    (log/error "API call failed:" (.getMessage e) "Status:" (:status (ex-data e)))
+                    (log/error "Response headers:" (get-in (ex-data e) [:headers]))
+                    (log/error "Response body:" (try
                                                   (slurp (get-in (ex-data e) [:body]))
                                                   (catch Exception e2
-                                                    (println "Error reading response body:" (.getMessage e2))
+                                                    (log/error "Error reading response body:" (.getMessage e2))
                                                     "Unreadable")))
                     (if (and (= (:status (ex-data e)) 429) (< attempt max-retries))
                       (let [retry-after (or (some-> (get-in (ex-data e) [:headers :retry-after])
                                                     (Integer/parseInt))
                                             retry-delay)]
-                        (println (str "Rate limit hit (attempt " attempt "/" max-retries "). Waiting " retry-after " seconds..."))
+                        (log/warn (str "Rate limit hit (attempt " attempt "/" max-retries "). Waiting " retry-after " seconds..."))
                         (Thread/sleep (* retry-after 1000))
                         ::retry)        ; Use a signal value for retry
                       (do
-                        (println "Non-retryable error:" (.getMessage e))
+                        (log/error "Non-retryable error:" (.getMessage e))
                         (throw e)))))]  ; Re-throw original exception
             (if (= response ::retry)
               (recur (inc attempt))
               (do
-                (println "API call successful, response received")
+                (log/report "API call successful, response received")
                 (assoc (:body response) :notes notes))))))
       (catch Exception e
-        (println "Error in Gemini API call:" (.getMessage e) "Stacktrace:" (seq (.getStackTrace e)))
+        (log/error "Error in Gemini API call:" (.getMessage e) "Stacktrace:" (seq (.getStackTrace e)))
         (throw e))
       (finally
 ;;        (io/delete-file temp-file :silent)

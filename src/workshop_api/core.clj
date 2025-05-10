@@ -17,7 +17,9 @@
 (log/merge-config! {:min-level :error})
 
 (log/with-merged-config {:min-level :debug}
-  (log/info {:db_env (System/getenv "DB_ENV") :git-version (git-describe-tags)}))
+  (log/report "TIMBRE_MIN_LEVEL:" (System/getenv "TIMBRE_MIN_LEVEL"))
+  (log/report "DB_ENV:" (System/getenv "DB_ENV"))
+  (log/report "GIT-VERSION:" (git-describe-tags)))
 
 (def app
   (-> (routes
