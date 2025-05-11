@@ -10,7 +10,7 @@
             [workshop-api.auth :as auth]
             [workshop-api.routes :as routes]
             [workshop-api.middleware :as middleware]
-            [workshop-api.utils.git :refer [git-describe-tags]]
+            [workshop-api.utils.git :refer [git-describe-tags git-commit-hash]]
             [buddy.auth.middleware :refer [wrap-authentication wrap-authorization]]
             [taoensso.timbre :as log]))
 
@@ -19,7 +19,10 @@
 (log/with-merged-config {:min-level :debug}
   (log/report "TIMBRE_MIN_LEVEL:" (System/getenv "TIMBRE_MIN_LEVEL"))
   (log/report "DB_ENV:" (System/getenv "DB_ENV"))
-  (log/report "GIT-VERSION:" (git-describe-tags)))
+  (log/report "GIT-VERSION:" (let [tag (git-describe-tags)]
+                               (if (= tag "Git hash not found")
+                                 (git-commit-hash)
+                                 tag))))
 
 (def app
   (-> (routes
