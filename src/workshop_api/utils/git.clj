@@ -21,6 +21,7 @@
 (def repo (some #(when (exists? %) %) repos))
 (log/debug "repo:" repo)
 (log/debug "pwd:" (sh "pwd" :dir repo))
+(log/debug "git:" (sh "git" "describe" "--tags" :dir repo))
 
 (defn git-commit-hash []
   (try
