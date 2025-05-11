@@ -19,6 +19,7 @@
     (zero? exit)))
 
 (def repo (some #(when (exists? %) %) repos))
+(log/debug "repo:" repo)
 
 (defn git-commit-hash []
   (try
