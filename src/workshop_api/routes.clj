@@ -496,7 +496,9 @@
     (let [response (delete-item id)]
       (log/debug "### Handler response for id" id ":" response)
       response))
-  (POST "/images" request (add-image request))
+  (POST "/images" request
+    (log/debug "Matched route POST /images")
+    (add-image request))
   (POST "/images/:id/analyze" [id :as request] (analyze-image request id))
   (POST "/item-images" request (add-item-image request))
   (DELETE "/item-images/:item_id/:image_id" [item_id image_id]
