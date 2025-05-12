@@ -626,6 +626,10 @@
   (jdbc/execute-one! ds
                      ["DELETE FROM locations WHERE id = ?::uuid" id]))
 
+(defn db-delete-image [id]
+  (jdbc/execute-one! ds
+                     ["DELETE FROM images WHERE id = ?::uuid" id]))
+
 (defn db-get-location-by-name [name]
   (jdbc/execute-one! ds
                      ["SELECT l.*, lt.name AS location_type_name, la.name AS location_area_name

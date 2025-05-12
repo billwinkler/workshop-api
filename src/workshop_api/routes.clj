@@ -394,6 +394,14 @@
       (response (assoc image :analyses analyses)))
     (status (response {:error "Image not found"}) 404)))
 
+(defn delete-image [id]
+  (if-let [image (db/db-get-image id)]
+    (do
+      (db/db-delete-image id)
+      (log/debug "Deleted image with id:" id)
+      (response {:status "success"}))
+    (status (response {:error "Image not found"}) 404)))
+
 (defn get-images [request]
   (try
     (log/debug "Processing get-images")
@@ -500,6 +508,9 @@
   (POST "/images" request
     (log/debug "Matched route POST /images")
     (add-image request))
+  (DELETE "/images/:image_id" [image_id]
+        (log/debug "Matched route DELETE /images")
+        (delete-image image_id))
   (POST "/images/:id/analyze" [id :as request] (analyze-image request id))
   ;; Location Types
   (GET "/location-types" [] (response (db/db-get-location-types)))

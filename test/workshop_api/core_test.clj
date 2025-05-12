@@ -412,6 +412,73 @@
         (is (= 401 (:status response)) "Expected 401 status")
         (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))))
 
+(deftest test-delete-image
+  (testing "Deleting an image"
+    (let [user {:id (generate-id) :username "testuser"}
+          payload {:user_id (:id user) :username (:username user)
+                   :iat (quot (System/currentTimeMillis) 1000)
+                   :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+          token (jwt/sign payload jwt-secret {:alg :hs256})
+          ;; First, add an image to delete
+          add-request (-> (mock/request :post "/api/images")
+                          (mock/content-type "multipart/form-data")
+                          (mock/multipart-body
+                           {:image {:filename "test-delete.jpg"
+                                    :content-type "image/jpeg"
+                                    :value "base64-encoded-data"}
+                            :mime_type "image/jpeg"
+                            :filename "test-delete.jpg"})
+                          (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+          add-response (app add-request)
+          add-response-body (try (json/parse-string (:body add-response) true)
+                                 (catch Exception e
+                                   (println "Failed to parse add response:" (.getMessage e))
+                                   {}))
+          image-id (java.util.UUID/fromString (:id add-response-body))] ; Convert to UUID
+
+      ;; Test 1: Successful deletion with valid JWT
+      (testing "Deleting an existing image with valid JWT"
+        (let [delete-request (-> (mock/request :delete (str "/api/images/" image-id))
+                                 (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+              delete-response (app delete-request)
+              delete-response-body (try (json/parse-string (:body delete-response) true)
+                                        (catch Exception e
+                                          (println "Failed to parse delete response:" (.getMessage e))
+                                          {}))
+              db-image (find-by-keys-unqualified ds :images {:id image-id})]
+          (println "Delete response status (valid JWT):" (:status delete-response))
+          (println "Delete response body (valid JWT):" delete-response-body)
+          (is (= 200 (:status delete-response)) "Expected 200 status for successful deletion")
+          (is (empty? db-image) "Expected no image in database after deletion")))
+
+      ;; Test 2: Unauthorized deletion without JWT
+      (testing "Deleting an image without JWT"
+        (let [delete-request (mock/request :delete (str "/api/images/" image-id))
+              delete-response (app delete-request)
+              delete-response-body (try (json/parse-string (:body delete-response) true)
+                                        (catch Exception e
+                                          (println "Failed to parse delete response:" (.getMessage e))
+                                          {}))]
+          (println "Delete response status (no JWT):" (:status delete-response))
+          (println "Delete response body (no JWT):" delete-response-body)
+          (is (= 401 (:status delete-response)) "Expected 401 status for unauthorized deletion")
+          (is (= "Unauthorized" (:message delete-response-body)) "Expected unauthorized message")))
+
+      ;; Test 3: Deleting a non-existent image with valid JWT
+      (testing "Deleting a non-existent image with valid JWT"
+        (let [non-existent-id (java.util.UUID/randomUUID) ; Already a UUID object
+              delete-request (-> (mock/request :delete (str "/api/images/" non-existent-id))
+                                 (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+              delete-response (app delete-request)
+              delete-response-body (try (json/parse-string (:body delete-response) true)
+                                        (catch Exception e
+                                          (println "Failed to parse delete response:" (.getMessage e))
+                                          {}))]
+          (println "Delete response status (non-existent image):" (:status delete-response))
+          (println "Delete response body (non-existent image):" delete-response-body)
+          (is (= 404 (:status delete-response)) "Expected 404 status for non-existent image")
+          (is (= "Image not found" (:error delete-response-body)) "Expected not found error message"))))))
+
 (deftest test-add-item-image
   (testing "Adding a valid item-image link with JWT"
     (let [user {:id (generate-id) :username "testuser"}
