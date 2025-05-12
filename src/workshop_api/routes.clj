@@ -201,6 +201,7 @@
       (status (response {:error "Invalid location_id format" :location_id location-id}) 400))))
 
 (defn add-image [request]
+  (log/debug "Received request headers:" (:headers request))
   (let [params (:multipart-params request)
         image-file (get params "image")
         mime-type (get params "mime_type")
@@ -209,22 +210,24 @@
     (cond
       (not (and image-file mime-type filename))
       (do
-        (log/error "Missing required multipart fields")
+        (log/error "Missing required multipart fields" {:image (boolean image-file)
+                                                        :mime_type (boolean mime-type)
+                                                        :filename (boolean filename)})
         (status (response {:error "Missing required fields" :data params}) 400))
 
       (not (string? mime-type))
       (do
-        (log/error "Invalid mime_type format")
+        (log/error "Invalid mime_type format" {:mime_type mime-type})
         (status (response {:error "Invalid mime_type format" :mime_type mime-type}) 400))
 
       (not (string? filename))
       (do
-        (log/error "Invalid filename format")
+        (log/error "Invalid filename format" {:filename filename})
         (status (response {:error "Invalid filename format" :filename filename}) 400))
 
       (not (:tempfile image-file))
       (do
-        (log/error "No valid image file uploaded")
+        (log/error "No valid image file uploaded" {:image_file image-file})
         (status (response {:error "No valid image file uploaded"}) 400))
 
       :else
@@ -244,17 +247,25 @@
             (let [image {:image_data image-data
                          :mime_type mime-type
                          :filename filename
-                         :status "uploaded"}]
-              (if (util/valid-image? image)
-                (let [new-image (util/prepare-image image)]
-                  (db/db-add-image new-image)
-                  (response new-image))
+                         :status "uploaded"}
+                  valid? (util/valid-image? image)]
+              (log/debug "Constructed image map:" image)
+              (log/debug "Image validation result:" valid?)
+              (if valid?
+                (let [new-image (util/prepare-image image)
+                      db-result (db/db-add-image new-image)]
+                  (log/debug "Prepared image for DB:" new-image)
+                  (log/debug "DB result:" db-result)
+                  (let [resp (response db-result)]
+                    (log/debug "Final response:" resp)
+                    resp))
                 (do
                   (log/error "Invalid image format:" image)
                   (status (response {:error "Invalid image format" :data image}) 400))))))
         (catch Exception e
           (log/error "Error adding image:" (.getMessage e))
           (status (response {:error "Database error" :message (.getMessage e)}) 400))))))
+
     
 (defn analyze-image [request id]
   (log/debug "Analyzing image ID:" id)
@@ -567,6 +578,7 @@
     (routes
       public-routes
       (wrap-multipart-params
+       {:max-file-size (* 2 1024 1024)} ; 2 MB limit
        (wrap-auth protected-routes))))
   (ANY "*" request
     (log/debug "Unmatched request - URI:" (:uri request) "Method:" (:request-method request))

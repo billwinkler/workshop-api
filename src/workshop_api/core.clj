@@ -46,6 +46,8 @@
       (log/debug "Database connection failed:" (.getMessage e)))))
 
 (defn -main []
-  (log/info "Starting workshop-api v0.1.0")
+  (log/info "Starting workshop-api v0.1.2")
   (test-connection)
-  (jetty/run-jetty app {:port 3000 :join? false}))
+  (jetty/run-jetty app {:port 3000
+                        :max-form-body-size (* 2 1024 1024) ; 2 MB
+                        :join? false}))

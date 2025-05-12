@@ -30,7 +30,7 @@
 
 (defn wrap-error-handling [handler]
   (fn [request]
-    (log/error ">>>>wrap-error request:" request)
+    (log/debug "in wrap-error-handling with request:" request)
     (try
       (handler request)
       (catch clojure.lang.ExceptionInfo e
