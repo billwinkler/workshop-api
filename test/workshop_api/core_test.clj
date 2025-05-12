@@ -348,14 +348,13 @@
         (println "Response body:" response-body)
         (println "Response body images" (:images/id response-body))
         (is (= 200 (:status response)) "Expected 200 status")
-        (is (= "test.jpg" (:images/filename response-body)) "Expected correct filename in response")
+        (is (= "test.jpg" (:filename response-body)) "Expected correct filename in response")
         (is (or (nil? (:id response-body))
                 (uuid? (java.util.UUID/fromString (:id response-body))))
             "Expected valid UUID in response")
-        (is (nil? (:status response-body)) "Expected no status in response")
         (is (= 1 (count db-image)) "Expected one image in database")
         (is (= "test.jpg" (:filename (first db-image))) "Expected correct filename in database")
-        (is (= "uploaded" (:images/status response-body)) "Expected correct uploaded status in response")
+        (is (= "uploaded" (:status response-body)) "Expected correct uploaded status in response")
 
         (is (= "uploaded" (:status (first db-image))) "Expected no status in database"))))
   (testing "Adding a valid image without JWT"

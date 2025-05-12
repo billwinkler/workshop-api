@@ -498,13 +498,12 @@
       (log/error "Error building location hierarchy:" (.getMessage e))
       (throw (ex-info "Failed to build location hierarchy" {:error (.getMessage e)})))))
 
-;; --- Existing Functions (Unchanged) ---
 (defn db-add-image [image]
   (jdbc/execute-one! ds
                      ["INSERT INTO images (id, image_data, mime_type, filename, status, created_at, updated_at)
                        VALUES (?::uuid, ?, ?, ?, ?, ?, ?)"
                       (:id image) (:image_data image) (:mime_type image) (:filename image) (:status image) (:created_at image) (:updated_at image)]
-                     {:return-keys true}))
+                     {:return-keys true :builder-fn rs/as-unqualified-lower-maps}))
 
 (defn db-add-image-analysis [analysis & [conn]]
   (let [ds (or conn ds)]
