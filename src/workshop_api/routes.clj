@@ -500,13 +500,17 @@
     (log/debug "Matched route POST /images")
     (add-image request))
   (POST "/images/:id/analyze" [id :as request] (analyze-image request id))
-  (POST "/item-images" request (add-item-image request))
+  (POST "/item-images" request
+    (log/debug "Matched POST /item-images route")
+    (add-item-image request))
   (DELETE "/item-images/:item_id/:image_id" [item_id image_id]
     (delete-item-image item_id image_id))
   (POST "/location-images" request (add-location-image request))
   (DELETE "/location-images/:location_id/:image_id" [location_id image_id]
     (delete-location-image location_id image_id))
-  (GET "/item-images" request (get-item-images request))
+  (GET "/item-images" request
+    (log/debug "Matched GET /item-images route")
+    (get-item-images request))
   (GET "/location-images" request (get-location-images request))
   ;; Location Types
   (GET "/location-types" []
