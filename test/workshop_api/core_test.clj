@@ -1,6 +1,7 @@
 (ns workshop-api.core-test
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [ring.mock.request :as mock]
+            [ring.middleware.multipart-params :as multipart]
             [ring.util.response :refer [response status]]
             [ring.middleware.json :refer [wrap-json-body]]
             [next.jdbc :as jdbc]
@@ -300,45 +301,79 @@
         (is (= 401 (:status response)) "Expected 401 status")
         (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))))
 
+(deftest test-multipart-request
+  (let [mock-request (-> (mock/request :post "/") ; Base request with POST and URI
+                         (mock/content-type "multipart/form-data") ; Set Content-Type header
+                         (mock/multipart-body ; Add the multipart body
+                          {:text-field "Some text data"
+                           :file-field {:filename "my-file.txt"
+                                        :content-type "text/plain"
+                                        :value "This is the file content."}}))
+        handler (fn [request]
+                  (let [params (:params request)
+                        multipart-params (:multipart-params request)]
+                    {:status 200
+                     :headers {"Content-Type" "text/plain"}
+                     :body (str "Params: " params
+                                "\nMultipart Params: " multipart-params)}))
+        multipart-handler (multipart/wrap-multipart-params handler)
+        response (multipart-handler mock-request)]
+
+    (is (= 200 (:status response)))))
+
 (deftest test-add-image
+  (println "Using app definition:" app)
   (testing "Adding a valid image with JWT"
     (let [user {:id (generate-id) :username "testuser"}
           payload {:user_id (:id user) :username (:username user)
                    :iat (quot (System/currentTimeMillis) 1000)
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
-          image {:image_data "base64-encoded-data"
-                 :mime_type "image/jpeg"
-                 :filename "test.jpg"}
           request (-> (mock/request :post "/api/images")
-                      (mock/json-body image)
+                      (mock/content-type "multipart/form-data")
+                      (mock/multipart-body
+                       {:image {:filename "test.jpg"
+                                :content-type "image/jpeg"
+                                :value "base64-encoded-data"}
+                        :mime_type "image/jpeg"
+                        :filename "test.jpg"})
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
           response (app request)]
       (let [response-body (try (json/parse-string (:body response) true)
-                              (catch Exception e
-                                (println "Failed to parse response:" (.getMessage e))
-                                {}))
+                               (catch Exception e
+                                 (println "Failed to parse response:" (.getMessage e))
+                                 {}))
             db-image (find-by-keys-unqualified ds :images {:filename "test.jpg"})]
+        (println "Response status:" (:status response))
+        (println "Response body:" response-body)
+        (println "Response body images" (:images/id response-body))
         (is (= 200 (:status response)) "Expected 200 status")
-        (is (= "test.jpg" (:filename response-body)) "Expected correct filename in response")
+        (is (= "test.jpg" (:images/filename response-body)) "Expected correct filename in response")
         (is (or (nil? (:id response-body))
                 (uuid? (java.util.UUID/fromString (:id response-body))))
             "Expected valid UUID in response")
         (is (nil? (:status response-body)) "Expected no status in response")
         (is (= 1 (count db-image)) "Expected one image in database")
         (is (= "test.jpg" (:filename (first db-image))) "Expected correct filename in database")
-        (is (nil? (:status (first db-image))) "Expected no status in database"))))
+        (is (= "uploaded" (:images/status response-body)) "Expected correct uploaded status in response")
+
+        (is (= "uploaded" (:status (first db-image))) "Expected no status in database"))))
   (testing "Adding a valid image without JWT"
-    (let [image {:image_data "base64-encoded-data"
-                 :mime_type "image/jpeg"
-                 :filename "test.jpg"}
-          request (-> (mock/request :post "/api/images")
-                      (mock/json-body image))
+    (let [request (-> (mock/request :post "/api/images")
+                      (mock/content-type "multipart/form-data")
+                      (mock/multipart-body
+                       {:image {:filename "test.jpg"
+                                :content-type "image/jpeg"
+                                :value "base64-encoded-data"}
+                        :mime_type "image/jpeg"
+                        :filename "test.jpg"}))
           response (app request)]
       (let [response-body (try (json/parse-string (:body response) true)
-                              (catch Exception e
-                                (println "Failed to parse response:" (.getMessage e))
-                                {}))]
+                               (catch Exception e
+                                 (println "Failed to parse response:" (.getMessage e))
+                                 {}))]
+        (println "Response status (no JWT):" (:status response))
+        (println "Response body (no JWT):" response-body)
         (is (= 401 (:status response)) "Expected 401 status")
         (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message"))))
   (testing "Adding an invalid image with JWT (missing required fields)"
@@ -347,28 +382,34 @@
                    :iat (quot (System/currentTimeMillis) 1000)
                    :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
           token (jwt/sign payload jwt-secret {:alg :hs256})
-          image {:filename "invalid.jpg"}
           request (-> (mock/request :post "/api/images")
-                      (mock/json-body image)
+                      (mock/content-type "multipart/form-data")
+                      (mock/multipart-body
+                       {:filename "invalid.jpg"})
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
           response (app request)]
       (let [response-body (try (json/parse-string (:body response) true)
-                              (catch Exception e
-                                (println "Failed to parse response:" (.getMessage e))
-                                {}))]
+                               (catch Exception e
+                                 (println "Failed to parse response:" (.getMessage e))
+                                 {}))]
+        (println "Response status (invalid image):" (:status response))
+        (println "Response body (invalid image):" response-body)
         (is (= 400 (:status response)) "Expected 400 status")
-        (is (= "Invalid image format" (:error response-body)) "Expected error message")
+        (is (= "Missing required fields" (:error response-body)) "Expected error message")
         (is (empty? (find-by-keys-unqualified ds :images {:filename "invalid.jpg"}))
             "Expected no image in database"))))
   (testing "Adding an invalid image without JWT"
-    (let [image {:filename "invalid.jpg"}
-          request (-> (mock/request :post "/api/images")
-                      (mock/json-body image))
+    (let [request (-> (mock/request :post "/api/images")
+                      (mock/content-type "multipart/form-data")
+                      (mock/multipart-body
+                       {:filename "invalid.jpg"}))
           response (app request)]
       (let [response-body (try (json/parse-string (:body response) true)
-                              (catch Exception e
-                                (println "Failed to parse response:" (.getMessage e))
-                                {}))]
+                               (catch Exception e
+                                 (println "Failed to parse response:" (.getMessage e))
+                                 {}))]
+        (println "Response status (invalid image, no JWT):" (:status response))
+        (println "Response body (invalid image, no JWT):" response-body)
         (is (= 401 (:status response)) "Expected 401 status")
         (is (= "Unauthorized" (:message response-body)) "Expected unauthorized message")))))
 
@@ -381,9 +422,9 @@
           token (jwt/sign payload jwt-secret {:alg :hs256})
           location-id (generate-id)
           location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
-                                             {:builder-fn rs/as-unqualified-lower-maps}))
+                                              {:builder-fn rs/as-unqualified-lower-maps}))
           location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
-                                             {:builder-fn rs/as-unqualified-lower-maps}))
+                                              {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
@@ -395,7 +436,7 @@
           _ (db-add-location location)
           item-id (generate-id)
           category (first (jdbc/execute! ds ["SELECT id FROM item_categories WHERE name = ?" "Hand Tool"]
-                                        {:builder-fn rs/as-unqualified-lower-maps}))
+                                         {:builder-fn rs/as-unqualified-lower-maps}))
           item {:id item-id
                 :name "Screwdriver"
                 :description "Phillips head screwdriver"
@@ -419,9 +460,9 @@
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
           response (app request)]
       (let [response-body (try (json/parse-string (:body response) true)
-                              (catch Exception e
-                                (println "Failed to parse response:" (.getMessage e))
-                                {}))]
+                               (catch Exception e
+                                 (println "Failed to parse response:" (.getMessage e))
+                                 {}))]
         (println "Response status (item-image):" (:status response))
         (println "Response body (item-image):" response-body)
         (is (= 200 (:status response)) "Expected 200 status")
@@ -434,9 +475,9 @@
   (testing "Adding a valid item-image link without JWT"
     (let [location-id (generate-id)
           location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
-                                             {:builder-fn rs/as-unqualified-lower-maps}))
+                                              {:builder-fn rs/as-unqualified-lower-maps}))
           location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
-                                             {:builder-fn rs/as-unqualified-lower-maps}))
+                                              {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
@@ -448,7 +489,7 @@
           _ (db-add-location location)
           item-id (generate-id)
           category (first (jdbc/execute! ds ["SELECT id FROM item_categories WHERE name = ?" "Hand Tool"]
-                                        {:builder-fn rs/as-unqualified-lower-maps}))
+                                         {:builder-fn rs/as-unqualified-lower-maps}))
           item {:id item-id
                 :name "Screwdriver"
                 :description "Phillips head screwdriver"
@@ -471,9 +512,9 @@
                       (mock/json-body item-image))
           response (app request)]
       (let [response-body (try (json/parse-string (:body response) true)
-                              (catch Exception e
-                                (println "Failed to parse response:" (.getMessage e))
-                                {}))]
+                               (catch Exception e
+                                 (println "Failed to parse response:" (.getMessage e))
+                                 {}))]
         (println "Response status (item-image, no JWT):" (:status response))
         (println "Response body (item-image, no JWT):" response-body)
         (is (= 401 (:status response)) "Expected 401 status")
@@ -490,9 +531,9 @@
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
           response (app request)]
       (let [response-body (try (json/parse-string (:body response) true)
-                              (catch Exception e
-                                (println "Failed to parse response:" (.getMessage e))
-                                {}))]
+                               (catch Exception e
+                                 (println "Failed to parse response:" (.getMessage e))
+                                 {}))]
         (println "Response status (item-image, invalid UUIDs):" (:status response))
         (println "Response body (item-image, invalid UUIDs):" response-body)
         (is (= 400 (:status response)) "Expected 400 status")
@@ -518,9 +559,9 @@
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
           response (app request)]
       (let [response-body (try (json/parse-string (:body response) true)
-                              (catch Exception e
-                                (println "Failed to parse response:" (.getMessage e))
-                                {}))]
+                               (catch Exception e
+                                 (println "Failed to parse response:" (.getMessage e))
+                                 {}))]
         (println "Response status (item-image, non-existent item):" (:status response))
         (println "Response body (item-image, non-existent item):" response-body)
         (is (= 404 (:status response)) "Expected 404 status")
@@ -534,9 +575,9 @@
           token (jwt/sign payload jwt-secret {:alg :hs256})
           location-id (generate-id)
           location-type (first (jdbc/execute! ds ["SELECT id FROM location_types WHERE name = ?" "Shed"]
-                                             {:builder-fn rs/as-unqualified-lower-maps}))
+                                              {:builder-fn rs/as-unqualified-lower-maps}))
           location-area (first (jdbc/execute! ds ["SELECT id FROM location_areas WHERE name = ?" "Backyard"]
-                                             {:builder-fn rs/as-unqualified-lower-maps}))
+                                              {:builder-fn rs/as-unqualified-lower-maps}))
           location {:id location-id
                     :label "L1"
                     :name "Tool Shed"
@@ -548,7 +589,7 @@
           _ (db-add-location location)
           item-id (generate-id)
           category (first (jdbc/execute! ds ["SELECT id FROM item_categories WHERE name = ?" "Hand Tool"]
-                                        {:builder-fn rs/as-unqualified-lower-maps}))
+                                         {:builder-fn rs/as-unqualified-lower-maps}))
           item {:id item-id
                 :name "Screwdriver"
                 :description "Phillips head screwdriver"
@@ -564,9 +605,9 @@
                       (assoc-in [:headers "Authorization"] (str "Bearer " token)))
           response (app request)]
       (let [response-body (try (json/parse-string (:body response) true)
-                              (catch Exception e
-                                (println "Failed to parse response:" (.getMessage e))
-                                {}))]
+                               (catch Exception e
+                                 (println "Failed to parse response:" (.getMessage e))
+                                 {}))]
         (println "Response status (item-image, non-existent image):" (:status response))
         (println "Response body (item-image, non-existent image):" response-body)
         (is (= 404 (:status response)) "Expected 404 status")

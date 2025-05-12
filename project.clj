@@ -7,7 +7,7 @@
                  [ring/ring-jetty-adapter "1.14.1"]
                  [ring/ring-core "1.14.1"]
                  [ring/ring-json "0.5.1"]
-                 [ring/ring-mock "0.4.0"]
+                 [ring/ring-mock "0.6.1"]
                  [ring-cors/ring-cors "0.1.13"]
                  [compojure "1.7.1"]
                  [ch.qos.logback/logback-classic "1.4.14"]

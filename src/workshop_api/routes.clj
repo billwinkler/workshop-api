@@ -201,6 +201,7 @@
       (status (response {:error "Invalid location_id format" :location_id location-id}) 400))))
 
 (defn add-image [request]
+  (log/debug "Entering add-image handler")
   (log/debug "Received request headers:" (:headers request))
   (let [params (:multipart-params request)
         image-file (get params "image")
@@ -477,11 +478,6 @@
   (POST "/test" request
     (response {:received-body (:body request)})))
 
-(defroutes upload-routes
-  (POST "/images" request
-    (log/debug "Matched route POST /images")
-    (add-image request)))
-
 (defroutes protected-routes
   (POST "/locations" request (add-location request))
   (PATCH "/locations/:id" [id :as request] (update-location request id))
@@ -501,6 +497,9 @@
   (GET "/location-images" request
     (log/debug "Matched GET /location-images")
     (get-location-images request))
+  (POST "/images" request
+    (log/debug "Matched route POST /images")
+    (add-image request))
   (POST "/images/:id/analyze" [id :as request] (analyze-image request id))
   ;; Location Types
   (GET "/location-types" [] (response (db/db-get-location-types)))
@@ -564,15 +563,34 @@
   (POST "/api/register" request (auth/register-user request))
   (POST "/api/login" request (auth/login-user request)))
 
+(defroutes upload-routes
+  (POST "/images" request
+    (log/debug "Matched route POST /images")
+    (add-image request)))
+
 (defroutes app-routes
   (context "/api" []
     (routes
-      public-routes
+     public-routes
+     (wrap-auth
       (wrap-multipart-params
-       {:max-file-size (* 2 1024 1024)}
-       upload-routes)
-      (wrap-auth protected-routes)))
+        ;; {:max-file-size (* 2 1024 1024)}  ;; If needed
+       upload-routes))
+     protected-routes))
   (ANY "*" request
     (log/debug "Unmatched request - URI:" (:uri request) "Method:" (:request-method request))
     (status (response {:error "Route not found" :uri (:uri request)}) 404)))
+
+(comment 
+  (defroutes app-routes
+    (context "/api" []
+      (log/debug "Evaluating /api context routes")
+      (routes
+       public-routes
+       (wrap-multipart-params
+        {:max-file-size (* 2 1024 1024)}
+        (wrap-auth protected-routes))))
+    (ANY "*" request
+      (log/debug "Unmatched request - URI:" (:uri request) "Method:" (:request-method request))
+      (status (response {:error "Route not found" :uri (:uri request)}) 404))))
 

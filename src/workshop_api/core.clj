@@ -14,7 +14,8 @@
             [buddy.auth.middleware :refer [wrap-authentication wrap-authorization]]
             [taoensso.timbre :as log]))
 
-(log/merge-config! {:min-level :error})
+(log/merge-config! {:min-level :debug})
+(log/debug "is debug working?")
 
 (log/with-merged-config {:min-level :debug}
   (log/report "TIMBRE_MIN_LEVEL:" (System/getenv "TIMBRE_MIN_LEVEL"))
