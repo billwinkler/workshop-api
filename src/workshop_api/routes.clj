@@ -1,6 +1,7 @@
 (ns workshop-api.routes
   (:require [compojure.core :refer :all]
             [ring.util.response :refer [response status]]
+            [ring.middleware.multipart-params :refer [wrap-multipart-params]]
             [clojure.core.async :refer [thread]]
             [workshop-api.db :as db]
             [workshop-api.util :as util]
@@ -9,7 +10,9 @@
             [workshop-api.auth :as auth]
             [buddy.auth :refer [authenticated? throw-unauthorized]]
             [cheshire.core :as json]
-            [taoensso.timbre :as log]))
+            [clojure.java.io :as io]
+            [taoensso.timbre :as log])
+  (:import [java.util Base64]))
 
 (defn add-location [request]
   (let [loc (db/keywordize-keys (:body request))]
@@ -198,66 +201,61 @@
       (status (response {:error "Invalid location_id format" :location_id location-id}) 400))))
 
 (defn add-image [request]
-  (let [image (db/keywordize-keys (:body request))]
-    (if (util/valid-image? image)
-      (try
-        (let [new-image (util/prepare-image image)]
-          (db/db-add-image new-image)
-          (response new-image))
-        (catch Exception e
-          (log/error "Error adding image:" (.getMessage e))
-          (status (response {:error "Database error" :message (.getMessage e)}) 400)))
-      (status (response {:error "Invalid image format" :data image}) 400))))
-
-(defn analyze-image-v0 [request id]
-  (log/debug "Analyzing image ID:" id)
-  (let [conn (or (:next.jdbc/connection request) db/ds)]
+  (let [params (:multipart-params request)
+        image-file (get params "image")
+        mime-type (get params "mime_type")
+        filename (get params "filename")]
+    (log/debug "Multipart params:" params)
     (cond
-      (not (valid-uuid? id))
+      (not (and image-file mime-type filename))
       (do
-        (log/error "Invalid UUID format:" id)
-        (status (response {:error "Invalid UUID format" :id id}) 400))
+        (log/error "Missing required multipart fields")
+        (status (response {:error "Missing required fields" :data params}) 400))
 
-      (not (db/db-get-image id conn))
+      (not (string? mime-type))
       (do
-        (log/error "Image not found for ID:" id)
-        (status (response {:error "Image not found"}) 404))
+        (log/error "Invalid mime_type format")
+        (status (response {:error "Invalid mime_type format" :mime_type mime-type}) 400))
+
+      (not (string? filename))
+      (do
+        (log/error "Invalid filename format")
+        (status (response {:error "Invalid filename format" :filename filename}) 400))
+
+      (not (:tempfile image-file))
+      (do
+        (log/error "No valid image file uploaded")
+        (status (response {:error "No valid image file uploaded"}) 400))
 
       :else
-      (let [config (db/keywordize-keys (:body request))]
-        (log/debug "Config:" config)
-        (if (not (util/valid-analysis-config? config))
-          (do
-            (log/error "Invalid analysis config:" config)
-            (status (response {:error "Invalid analysis configuration" :data config}) 400))
-          (try
-            (let [image (db/db-get-image id conn)
-                  analysis (util/prepare-image-analysis id config)]
-              (log/debug "Starting analysis for image ID:" id)
-              (db/db-add-image-analysis analysis conn)
-              (thread
-                (try
-                  (log/debug "Processing analysis ID:" (:id analysis))
-                  (db/db-update-image-analysis (:id analysis) {:status "processing"} conn)
-                  (let [result (util/gemini-call (:image_data image) (:model_version analysis) (:analysis_type analysis))]
-                    (log/debug "Gemini API result for analysis ID:" (:id analysis))
-                    (db/db-update-image-analysis (:id analysis)
-                                              {:status "completed"
-                                               :result (json/generate-string result)}
-                                              conn)
-                    (log/debug "Analysis completed for ID:" (:id analysis)))
-                  (catch Exception e
-                    (log/error "Error in analysis ID:" (:id analysis) "Error:" (.getMessage e))
-                    (db/db-update-image-analysis (:id analysis)
-                                              {:status "failed"
-                                               :error_message (.getMessage e)}
-                                              conn)
-                    (log/error "Analysis failed for ID:" (:id analysis)))))
-              (response {:status "analysis_started" :image_id id :analysis_id (:id analysis)}))
-            (catch Exception e
-              (log/error "Error starting analysis for ID:" id "Error:" (.getMessage e))
-              (status (response {:error "Database error" :message (.getMessage e)}) 500))))))))
-
+      (try
+        (let [file (:tempfile image-file)
+              file-size (:size image-file)
+              max-size (* 8 1024 1024)  ; 8 MB limit
+              image-data (with-open [in (io/input-stream file)]
+                           (let [bytes (byte-array file-size)]
+                             (.read in bytes)
+                             (.encodeToString (Base64/getEncoder) bytes)))]
+          (log/debug "Uploaded image size:" file-size "bytes")
+          (if (> file-size max-size)
+            (do
+              (log/error "Image file too large:" file-size)
+              (status (response {:error "Image file too large" :size file-size}) 413))
+            (let [image {:image_data image-data
+                         :mime_type mime-type
+                         :filename filename
+                         :status "uploaded"}]
+              (if (util/valid-image? image)
+                (let [new-image (util/prepare-image image)]
+                  (db/db-add-image new-image)
+                  (response new-image))
+                (do
+                  (log/error "Invalid image format:" image)
+                  (status (response {:error "Invalid image format" :data image}) 400))))))
+        (catch Exception e
+          (log/error "Error adding image:" (.getMessage e))
+          (status (response {:error "Database error" :message (.getMessage e)}) 400))))))
+    
 (defn analyze-image [request id]
   (log/debug "Analyzing image ID:" id)
   (let [conn (or (:next.jdbc/connection request) db/ds)]
@@ -568,7 +566,8 @@
   (context "/api" []
     (routes
       public-routes
-      (wrap-auth protected-routes)))
+      (wrap-multipart-params
+       (wrap-auth protected-routes))))
   (ANY "*" request
     (log/debug "Unmatched request - URI:" (:uri request) "Method:" (:request-method request))
     (status (response {:error "Route not found" :uri (:uri request)}) 404)))

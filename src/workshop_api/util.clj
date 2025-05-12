@@ -80,8 +80,23 @@
 (defn valid-image? [image]
   (let [result 
         (and (string? (:image_data image))
+             (not (str/blank? (:image_data image)))
              (string? (:mime_type image))
-             (or (nil? (:filename image)) (string? (:filename image))))]
+             (str/starts-with? (:mime_type image) "image/")
+             (string? (:filename image))
+             (not (str/blank? (:filename image)))
+             (string? (:status image))
+             (not (str/blank? (:status image))))]
+    (when (not result)
+      (log/debug "Image validation failed:"
+                 {:image_data (boolean (:image_data image))
+                  :image_data_non_empty (not (str/blank? (:image_data image)))
+                  :mime_type (boolean (:mime_type image))
+                  :mime_type_image (str/starts-with? (:mime_type image) "image/")
+                  :filename (boolean (:filename image))
+                  :filename_non_empty (not (str/blank? (:filename image)))
+                  :status (boolean (:status image))
+                  :status_non_empty (not (str/blank? (:status image)))}))
     result))
 
 (defn valid-analysis-config?-v0 [config]
