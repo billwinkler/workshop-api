@@ -477,44 +477,33 @@
   (POST "/test" request
     (response {:received-body (:body request)})))
 
-(defroutes protected-routes
-  (POST "/locations" request (add-location request))
-  (PATCH "/locations/:id" [id :as request]
-    (log/debug "Matched route PATCH /locations/:id" id)
-    (let [response (update-location request id)]
-      (log/debug "Handler response for id" id ":" response)
-      response))
-  (DELETE "/locations/:id" [id] (delete-location id))
-  (POST "/items" request (add-item request))
-  (PATCH "/items/:id" [id :as request]
-    (log/debug "### Matched route PATCH /items/:id" id)
-    (let [response (update-item request id)]
-      (log/debug "### Handler response for id" id ":" response)
-      response))
-  (DELETE "/items/:id" [id]
-    (log/debug "### Matched route DELETE /images/:id with id:" id)
-    (let [response (delete-item id)]
-      (log/debug "### Handler response for id" id ":" response)
-      response))
+(defroutes upload-routes
   (POST "/images" request
     (log/debug "Matched route POST /images")
-    (add-image request))
-  (POST "/images/:id/analyze" [id :as request] (analyze-image request id))
-  (POST "/item-images" request
-    (log/debug "Matched POST /item-images route")
-    (add-item-image request))
-  (DELETE "/item-images/:item_id/:image_id" [item_id image_id]
-    (delete-item-image item_id image_id))
+    (add-image request)))
+
+(defroutes protected-routes
+  (POST "/locations" request (add-location request))
+  (PATCH "/locations/:id" [id :as request] (update-location request id))
+  (DELETE "/locations/:id" [id] (delete-location id))
+  (POST "/items" request
+    (log/debug "Matched POST /items")
+    (add-item request))
+  (PATCH "/items/:id" [id :as request] (update-item request id))
+  (DELETE "/items/:id" [id] (delete-item id))
+  (POST "/item-images" request (add-item-image request))
+  (DELETE "/item-images/:item_id/:image_id" [item_id image_id] (delete-item-image item_id image_id))
   (POST "/location-images" request (add-location-image request))
-  (DELETE "/location-images/:location_id/:image_id" [location_id image_id]
-    (delete-location-image location_id image_id))
+  (DELETE "/location-images/:location_id/:image_id" [location_id image_id] (delete-location-image location_id image_id))
   (GET "/item-images" request
-    (log/debug "Matched GET /item-images route")
+    (log/debug "Matched GET /item-images")
     (get-item-images request))
-  (GET "/location-images" request (get-location-images request))
+  (GET "/location-images" request
+    (log/debug "Matched GET /location-images")
+    (get-location-images request))
+  (POST "/images/:id/analyze" [id :as request] (analyze-image request id))
   ;; Location Types
-  (GET "/location-types" []
-    (response (db/db-get-location-types)))
+  (GET "/location-types" [] (response (db/db-get-location-types)))
   (POST "/location-types" req
     (let [loc-type (-> (:body req)
                        (assoc :created_at (db/current-timestamp)
@@ -525,10 +514,8 @@
       (response (db/db-update-location-type (Integer/parseInt id) loc-type))))
   (DELETE "/location-types/:id" [id]
     (response (db/db-delete-location-type (Integer/parseInt id))))
-
-  ;; Location Areas (similar to Location Types)
-  (GET "/location-areas" []
-    (response (db/db-get-location-areas)))
+  ;; Location Areas
+  (GET "/location-areas" [] (response (db/db-get-location-areas)))
   (POST "/location-areas" req
     (let [loc-area (-> (:body req)
                        (assoc :created_at (db/current-timestamp)
@@ -539,10 +526,8 @@
       (response (db/db-update-location-area (Integer/parseInt id) loc-area))))
   (DELETE "/location-areas/:id" [id]
     (response (db/db-delete-location-area (Integer/parseInt id))))
-
-  ;; Item Categories (similar to Location Types)
-  (GET "/item-categories" []
-    (response (db/db-get-item-categories)))
+  ;; Item Categories
+  (GET "/item-categories" [] (response (db/db-get-item-categories)))
   (POST "/item-categories" req
     (let [category (-> (:body req)
                        (assoc :created_at (db/current-timestamp)
@@ -584,8 +569,10 @@
     (routes
       public-routes
       (wrap-multipart-params
-       {:max-file-size (* 2 1024 1024)} ; 2 MB limit
-       (wrap-auth protected-routes))))
+       {:max-file-size (* 2 1024 1024)}
+       upload-routes)
+      (wrap-auth protected-routes)))
   (ANY "*" request
     (log/debug "Unmatched request - URI:" (:uri request) "Method:" (:request-method request))
     (status (response {:error "Route not found" :uri (:uri request)}) 404)))
+
