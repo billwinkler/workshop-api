@@ -255,8 +255,8 @@
               (if valid?
                 (let [new-image (util/prepare-image image)
                       db-result (db/db-add-image new-image)]
-                  (log/debug "Prepared image for DB:" new-image)
-                  (log/debug "DB result:" db-result)
+;;                  (log/debug "Prepared image for DB:" new-image)
+;;                  (log/debug "DB result:" db-result)
                   (let [resp (response db-result)]
                     (log/debug "Final response:" resp)
                     resp))
