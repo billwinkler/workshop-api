@@ -157,15 +157,12 @@
       (status (response {:error "Invalid UUID format" :data {:location_id location_id :image_id image_id}}) 400))))
 
 (defn delete-item-image [item-id image-id]
-  (if (and (valid-uuid? item-id) (valid-uuid? image-id))
-    (if (db/db-get-item item-id)
-      (if (db/db-get-image image-id)
-        (do
-          (db/db-delete-item-image item-id image-id)
-          (response {:status "success"}))
-        (status (response {:error "Image not found"}) 404))
-      (status (response {:error "Item not found"}) 404))
-    (status (response {:error "Invalid UUID format" :data {:item_id item-id :image_id image-id}}) 400)))
+  (if-let [image (db/db-get-item-image item-id image-id)]
+    (do
+      (db/db-delete-item-image item-id image-id)
+      (log/debug "Deleted item-image with item's id:" item-id "and image's id:" image-id)
+      (response {:status "success"}))
+    (status (response {:error "Item-image association not found"}) 404)))
 
 (defn delete-location-image [location-id image-id]
   (if (and (valid-uuid? location-id) (valid-uuid? image-id))
@@ -401,6 +398,14 @@
       (log/debug "Deleted image with id:" id)
       (response {:status "success"}))
     (status (response {:error "Image not found"}) 404)))
+
+(defn delete-item-image [item-id image-id]
+  (if-let [image (db/db-get-item-image item-id image-id)]
+    (do
+      (db/db-delete-item-image item-id image-id)
+      (log/debug "Deleted item-image with item's id:" item-id "and image's id:" image-id)
+      (response/response {:status "success"}))
+    (response/status (response/response {:error "Item-image association not found"}) 404)))
 
 (defn get-images [request]
   (try

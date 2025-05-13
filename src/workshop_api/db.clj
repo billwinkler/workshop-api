@@ -630,6 +630,13 @@
   (jdbc/execute-one! ds
                      ["DELETE FROM images WHERE id = ?::uuid" id]))
 
+(defn db-delete-item-image [item-id image-id]
+  (:next.jdbc/update-count
+   (jdbc/execute-one! ds
+                      ["DELETE FROM item_images WHERE item_id = ?::uuid AND image_id = ?::uuid"
+                       item-id image-id]
+                      {:builder-fn rs/as-unqualified-lower-maps})))
+
 (defn db-get-location-by-name [name]
   (jdbc/execute-one! ds
                      ["SELECT l.*, lt.name AS location_type_name, la.name AS location_area_name
@@ -688,6 +695,12 @@
   (jdbc/execute-one! ds
                      ["DELETE FROM location_images WHERE location_id = ?::uuid AND image_id = ?::uuid"
                       location-id image-id]))
+
+(defn db-get-item-image [item-id image-id]
+  (jdbc/execute-one! ds
+                     ["SELECT item_id, image_id FROM item_images WHERE item_id = ?::uuid AND image_id = ?::uuid"
+                      item-id image-id]
+                     {:builder-fn rs/as-unqualified-lower-maps}))
 
 (defn db-get-item-images [item-id]
   (jdbc/execute! ds

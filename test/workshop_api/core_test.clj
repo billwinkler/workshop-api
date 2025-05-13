@@ -11,7 +11,7 @@
             [workshop-api.auth :refer [prepare-user auth-backend]]
             [workshop-api.db :refer [ds db-add-location db-get-image db-add-item db-add-image
                                      db-add-user db-add-item-image db-add-location-image
-                                     db-get-image-analyses current-timestamp]]
+                                     db-get-image-analyses current-timestamp] :as db]
             [workshop-api.core :refer [app]]
             [workshop-api.common :refer [valid-uuid?]]
             [workshop-api.util :refer [generate-id]]
@@ -478,6 +478,81 @@
           (println "Delete response body (non-existent image):" delete-response-body)
           (is (= 404 (:status delete-response)) "Expected 404 status for non-existent image")
           (is (= "Image not found" (:error delete-response-body)) "Expected not found error message"))))))
+
+(deftest test-delete-item-image
+(testing "Deleting an item-image association"
+  (let [user {:id (generate-id) :username "testuser"}
+        payload {:user_id (:id user) :username (:username user)
+                 :iat (quot (System/currentTimeMillis) 1000)
+                 :exp (+ (quot (System/currentTimeMillis) 1000) (* 60 60))}
+        token (jwt/sign payload jwt-secret {:alg :hs256})
+        ;; Add an item to the items table
+        item-id (java.util.UUID/randomUUID)
+        location-id (java.util.UUID/randomUUID)
+        now (current-timestamp)
+        _ (jdbc/execute! ds
+                         ["INSERT INTO items (id, name, description, location_id, created_at, updated_at) VALUES (?::uuid, ?, ?, ?::uuid, ?, ?)"
+                          item-id "test-item" "test description" location-id now now])
+        _ (jdbc/execute! ds
+                         ["INSERT INTO items (id, name, description, location_id, created_at, updated_at) VALUES (?::uuid, ?, ?, ?::uuid, ?, ?)"
+                          item-id "test-item" "test description" location-id now now])
+        ;; Add an image to the images table
+        image-id (java.util.UUID/randomUUID)
+        _ (jdbc/execute! ds
+                         ["INSERT INTO images (id, image_data, mime_type, filename, status, created_at, updated_at)
+                           VALUES (?::uuid, ?, ?, ?, ?, ?, ?)"
+                          image-id "base64-encoded-data" "image/jpeg" "test-item-image.jpg" "uploaded"
+                          (java.sql.Timestamp. (System/currentTimeMillis))
+                          (java.sql.Timestamp. (System/currentTimeMillis))])
+        ;; Add an item-image association
+        _ (jdbc/execute! ds
+                         ["INSERT INTO item_images (item_id, image_id) VALUES (?::uuid, ?::uuid)"
+                          item-id image-id])]
+
+    ;; Test 1: Successful deletion with valid JWT
+    (testing "Deleting an existing item-image association with valid JWT"
+      (let [delete-request (-> (mock/request :delete (str "/api/item-images/" item-id "/" image-id))
+                               (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+            delete-response (app delete-request)
+            delete-response-body (try (json/parse-string (:body delete-response) true)
+                                     (catch Exception e
+                                       (println "Failed to parse delete response:" (.getMessage e))
+                                       {}))
+            db-item-image (db/db-get-item-image item-id image-id)]
+        (println "Delete response status (valid JWT):" (:status delete-response))
+        (println "Delete response body (valid JWT):" delete-response-body)
+        (is (= 200 (:status delete-response)) "Expected 200 status for successful deletion")
+        (is (nil? db-item-image) "Expected no item-image association in database after deletion")
+        (is (= {:status "success"} delete-response-body) "Expected success response")))
+
+    ;; Test 2: Unauthorized deletion without JWT
+    (testing "Deleting an item-image association without JWT"
+      (let [delete-request (mock/request :delete (str "/api/item-images/" item-id "/" image-id))
+            delete-response (app delete-request)
+            delete-response-body (try (json/parse-string (:body delete-response) true)
+                                     (catch Exception e
+                                       (println "Failed to parse delete response:" (.getMessage e))
+                                       {}))]
+        (println "Delete response status (no JWT):" (:status delete-response))
+        (println "Delete response body (no JWT):" delete-response-body)
+        (is (= 401 (:status delete-response)) "Expected 401 status for unauthorized deletion")
+        (is (= "Unauthorized" (:message delete-response-body)) "Expected unauthorized message")))
+
+    ;; Test 3: Deleting a non-existent item-image association with valid JWT
+    (testing "Deleting a non-existent item-image association with valid JWT"
+      (let [non-existent-item-id (java.util.UUID/randomUUID)
+            non-existent-image-id (java.util.UUID/randomUUID)
+            delete-request (-> (mock/request :delete (str "/api/item-images/" non-existent-item-id "/" non-existent-image-id))
+                               (assoc-in [:headers "Authorization"] (str "Bearer " token)))
+            delete-response (app delete-request)
+            delete-response-body (try (json/parse-string (:body delete-response) true)
+                                     (catch Exception e
+                                       (println "Failed to parse delete response:" (.getMessage e))
+                                       {}))]
+        (println "Delete response status (non-existent item-image):" (:status delete-response))
+        (println "Delete response body (non-existent item-image):" delete-response-body)
+        (is (= 404 (:status delete-response)) "Expected 404 status for non-existent item-image")
+        (is (= {:error "Item-image association not found"} delete-response-body) "Expected not found error message"))))))
 
 (deftest test-add-item-image
   (testing "Adding a valid item-image link with JWT"
